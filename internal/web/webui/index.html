@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#090d18">
+  <title>PS3 Game Manager</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#dashboard"><span class="brand-mark">3</span><span>PS3<small>GAME MANAGER</small></span></a>
+      <nav>
+        <button class="nav active" data-view="dashboard"><span>◫</span>Dashboard</button>
+        <button class="nav" data-view="games"><span>▦</span>Games</button>
+        <button class="nav" data-view="consoles"><span>⌁</span>PS3 Consoles</button>
+        <button class="nav" data-view="scan"><span>⌖</span>Network Scan</button>
+        <button class="nav" data-view="queue"><span>⇅</span>Transfer Queue <b id="queueBadge">0</b></button>
+      </nav>
+      <div class="connection"><i></i><div><strong>Manager online</strong><small id="eventStatus">Live updates connecting…</small></div></div>
+    </aside>
+    <main>
+      <header><div><p class="eyebrow" id="eyebrow">LIBRARY OVERVIEW</p><h1 id="pageTitle">Dashboard</h1></div><button id="notifyBtn" class="button ghost">Enable notifications</button></header>
+
+      <section id="dashboard" class="view active">
+        <div class="hero"><div><p class="eyebrow">YOUR PLAYSTATION 3, ORGANIZED</p><h2>Move games, not mountains.</h2><p>Browse your library, find your console, and let the transfer queue handle the rest.</p><button class="button primary goto" data-view="games">Browse library →</button></div><div class="orb"><span>PS3</span></div></div>
+        <div class="stats"><article><span>LOCAL GAMES</span><strong id="statGames">—</strong><small>Ready to browse</small></article><article><span>CONSOLES</span><strong id="statConsoles">0</strong><small>Discovered this session</small></article><article><span>INSTALLED</span><strong id="statInstalled">—</strong><small>On selected PS3</small></article><article><span>IN QUEUE</span><strong id="statQueue">0</strong><small>Pending or active</small></article></div>
+        <div class="panel"><div class="panel-head"><div><p class="eyebrow">ACTIVITY</p><h3>Recent transfers</h3></div><button class="text-button goto" data-view="queue">View queue →</button></div><div id="recentQueue" class="empty">No transfers yet. Choose games to begin.</div></div>
+      </section>
+
+      <section id="games" class="view">
+        <div class="toolbar"><label class="search"><span>⌕</span><input id="gameSearch" placeholder="Search titles or game IDs…"></label><select id="gameFilter"><option value="all">All games</option><option value="installed">Installed</option><option value="missing">Missing</option><option value="queued">Queued</option></select><select id="gameSort"><option value="title">Sort: Title</option><option value="size">Sort: Size</option></select></div>
+        <div class="selection-bar"><div><button id="selectAll" class="text-button">Select all</button><button id="selectMissing" class="text-button">Select missing</button><button id="selectNone" class="text-button">Select none</button></div><div><strong id="selectionCount">0 games selected</strong><span id="selectionSize">0 B</span><button id="installSelected" class="button primary" disabled>Install selected</button></div></div>
+        <div id="gameGrid" class="game-grid"><div class="loading">Loading local library…</div></div>
+      </section>
+
+      <section id="consoles" class="view"><div class="panel-head"><div><p class="eyebrow">DISCOVERED DEVICES</p><h3>PS3 consoles</h3></div><button class="button primary goto" data-view="scan">Scan network</button></div><div id="consoleGrid" class="console-grid empty">No consoles discovered yet.</div></section>
+
+      <section id="scan" class="view"><div class="scan-card"><div><p class="eyebrow">LOCAL NETWORK</p><h2>Find your PS3</h2><p>Enter the private IPv4 CIDR used by your home network. Only this range will be checked.</p></div><form id="scanForm"><label>Network CIDR<input id="cidr" value="192.168.1.0/24" required></label><button class="button primary" id="scanButton">Scan network</button></form><div id="scanResult" class="scan-result">Ready to scan.</div></div></section>
+
+      <section id="queue" class="view"><div class="panel-head"><div><p class="eyebrow">ONE AT A TIME</p><h3>Transfer queue</h3></div><div><button id="pauseQueue" class="button ghost">Pause</button><button id="resumeQueue" class="button ghost">Resume</button><button id="clearQueue" class="button ghost">Clear completed</button></div></div><div id="queueList" class="queue-list empty">Your queue is empty.</div></section>
+    </main>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

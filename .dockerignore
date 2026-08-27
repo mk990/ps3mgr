@@ -1,0 +1,12 @@
+.git
+.github
+.agents
+.codex
+dist
+ps3mgr
+ps3-games.sh
+MasterPrompt.md
+Dockerfile*
+README.md
+*.log
+*.tmp
