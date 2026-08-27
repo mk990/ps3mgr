@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"ps3mgr/internal/config"
 	"ps3mgr/internal/domain"
@@ -38,7 +39,15 @@ func New(cfg config.Config) *Service {
 		Config: cfg, Events: bus, Library: games.NewLibrary(), FTP: ftpService,
 		consoles: make(map[string]domain.Console),
 	}
-	service.Scanner = &scanner.Scanner{Detector: ftpService, Workers: cfg.Workers, Timeout: cfg.FTPTimeout}
+	probeTimeout := cfg.ScanTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = 500 * time.Millisecond
+	}
+	detectionTimeout := cfg.FTPTimeout
+	if detectionTimeout <= 0 {
+		detectionTimeout = 8 * time.Second
+	}
+	service.Scanner = &scanner.Scanner{Detector: ftpService, Workers: cfg.Workers, Timeout: probeTimeout, DetectionTimeout: detectionTimeout}
 	service.Transfers = transfers.New(ftpService, bus, cfg.RemoteGameDir)
 	return service
 }
@@ -124,13 +133,32 @@ func (s *Service) Console(id string) (domain.Console, bool) {
 	return console, ok
 }
 
-func (s *Service) EnsureConsole(ip string) (domain.Console, error) {
-	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.To4() == nil {
-		return domain.Console{}, fmt.Errorf("invalid IPv4 address")
+// AddConsole verifies and registers a directly supplied private/local PS3 IP.
+func (s *Service) AddConsole(ctx context.Context, ip string) (domain.Console, error) {
+	ip, err := validateConsoleIP(ip)
+	if err != nil {
+		return domain.Console{}, err
 	}
-	if !parsed.IsPrivate() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() {
-		return domain.Console{}, fmt.Errorf("PS3 address must be private or local")
+	detected, count, err := s.Scanner.Detector.Detect(ctx, ip)
+	if err != nil {
+		return domain.Console{}, fmt.Errorf("connect to PS3 %s: %w", ip, err)
+	}
+	if !detected {
+		return domain.Console{}, fmt.Errorf("FTP endpoint %s does not appear to be a PS3", ip)
+	}
+	console := domain.Console{ID: ip, IP: ip, FTPOnline: true, Detected: true, GameCount: count, LastSeen: time.Now()}
+	s.mu.Lock()
+	s.consoles[ip] = console
+	s.mu.Unlock()
+	s.Events.Publish("console.connected", console)
+	return console, nil
+}
+
+func (s *Service) EnsureConsole(ip string) (domain.Console, error) {
+	var err error
+	ip, err = validateConsoleIP(ip)
+	if err != nil {
+		return domain.Console{}, err
 	}
 	console := domain.Console{ID: ip, IP: ip}
 	s.mu.Lock()
@@ -152,7 +180,18 @@ func (s *Service) RemoteGames(ctx context.Context, ip, remoteDir string) ([]doma
 	}
 	result, err := s.FTP.RemoteGames(ctx, ip, remoteDir)
 	if err == nil {
+		s.mu.Lock()
+		console := s.consoles[ip]
+		console.ID = ip
+		console.IP = ip
+		console.FTPOnline = true
+		console.Detected = true
+		console.GameCount = len(result)
+		console.LastSeen = time.Now()
+		s.consoles[ip] = console
+		s.mu.Unlock()
 		s.Events.Publish("games.loaded", map[string]any{"source": "remote", "console_id": ip, "count": len(result)})
+		s.Events.Publish("games.updated", map[string]any{"console_id": ip, "count": len(result)})
 	}
 	return result, err
 }
@@ -202,3 +241,15 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 func (s *Service) Close(ctx context.Context) error { return s.Transfers.Close(ctx) }
 
 func copyGames(value []domain.Game) []domain.Game { return append([]domain.Game(nil), value...) }
+
+func validateConsoleIP(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	parsed := net.ParseIP(value)
+	if parsed == nil || parsed.To4() == nil {
+		return "", fmt.Errorf("invalid IPv4 address")
+	}
+	if !parsed.IsPrivate() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() {
+		return "", fmt.Errorf("PS3 address must be private or local")
+	}
+	return parsed.String(), nil
+}

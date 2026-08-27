@@ -44,3 +44,11 @@ func TestLocalGamesFlagOverridesEnvironment(t *testing.T) {
 		t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errors.String())
 	}
 }
+
+func TestAddConsoleRejectsPublicAddress(t *testing.T) {
+	var output, errors bytes.Buffer
+	code := (Runner{Out: &output, Err: &errors}).Run(context.Background(), []string{"add-console", "--ip", "8.8.8.8"})
+	if code != 1 || !strings.Contains(errors.String(), "private or local") {
+		t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errors.String())
+	}
+}

@@ -19,9 +19,12 @@ type Detector interface {
 type Scanner struct {
 	Detector Detector
 	Workers  int
-	Timeout  time.Duration
-	Port     string
-	Dial     func(ctx context.Context, network, address string) (net.Conn, error)
+	// Timeout is the short TCP port probe timeout. DetectionTimeout applies only
+	// after the FTP port accepts a connection.
+	Timeout          time.Duration
+	DetectionTimeout time.Duration
+	Port             string
+	Dial             func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 func Enumerate(cidr string) ([]netip.Addr, error) {
@@ -58,7 +61,11 @@ func (s *Scanner) Scan(ctx context.Context, cidr string, found func(domain.Conso
 	}
 	timeout := s.Timeout
 	if timeout <= 0 {
-		timeout = 3 * time.Second
+		timeout = 500 * time.Millisecond
+	}
+	detectionTimeout := s.DetectionTimeout
+	if detectionTimeout <= 0 {
+		detectionTimeout = 8 * time.Second
 	}
 	port := s.Port
 	if port == "" {
@@ -78,11 +85,14 @@ func (s *Scanner) Scan(ctx context.Context, cidr string, found func(domain.Conso
 			defer wait.Done()
 			for address := range jobs {
 				host := address.String()
-				hostCtx, cancel := context.WithTimeout(ctx, timeout)
-				conn, dialErr := dial(hostCtx, "tcp", net.JoinHostPort(host, port))
+				probeCtx, cancelProbe := context.WithTimeout(ctx, timeout)
+				conn, dialErr := dial(probeCtx, "tcp", net.JoinHostPort(host, port))
+				cancelProbe()
 				if dialErr == nil {
 					conn.Close()
-					detected, count, detectErr := s.Detector.Detect(hostCtx, host)
+					detectCtx, cancelDetect := context.WithTimeout(ctx, detectionTimeout)
+					detected, count, detectErr := s.Detector.Detect(detectCtx, host)
+					cancelDetect()
 					if detectErr == nil && detected {
 						console := domain.Console{ID: host, IP: host, FTPOnline: true, Detected: true, GameCount: count, LastSeen: time.Now()}
 						select {
@@ -91,7 +101,6 @@ func (s *Scanner) Scan(ctx context.Context, cidr string, found func(domain.Conso
 						}
 					}
 				}
-				cancel()
 			}
 		}()
 	}

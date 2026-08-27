@@ -35,7 +35,7 @@
         <div id="gameGrid" class="game-grid"><div class="loading">Loading local library…</div></div>
       </section>
 
-      <section id="consoles" class="view"><div class="panel-head"><div><p class="eyebrow">DISCOVERED DEVICES</p><h3>PS3 consoles</h3></div><button class="button primary goto" data-view="scan">Scan network</button></div><div id="consoleGrid" class="console-grid empty">No consoles discovered yet.</div></section>
+      <section id="consoles" class="view"><div class="panel-head"><div><p class="eyebrow">DISCOVERED DEVICES</p><h3>PS3 consoles</h3></div><button class="button primary goto" data-view="scan">Scan network</button></div><form id="directForm" class="direct-console"><div><strong>Know the PS3 address?</strong><span>Connect directly without scanning the whole network.</span></div><label><input id="directIP" inputmode="decimal" placeholder="192.168.1.152" required></label><button class="button primary" id="directButton">Add PS3 by IP</button></form><div id="consoleGrid" class="console-grid empty">No consoles discovered yet.</div></section>
 
       <section id="scan" class="view"><div class="scan-card"><div><p class="eyebrow">LOCAL NETWORK</p><h2>Find your PS3</h2><p>Enter the private IPv4 CIDR used by your home network. Only this range will be checked.</p></div><form id="scanForm"><label>Network CIDR<input id="cidr" value="192.168.1.0/24" required></label><button class="button primary" id="scanButton">Scan network</button></form><div id="scanResult" class="scan-result">Ready to scan.</div></div></section>
 

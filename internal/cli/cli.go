@@ -63,6 +63,8 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 		commandErr = r.scan(ctx, application, args[1:])
 	case "consoles":
 		commandErr = r.consoles(application, args[1:])
+	case "add-console":
+		commandErr = r.addConsole(ctx, application, args[1:])
 	case "games":
 		commandErr = r.remoteGames(ctx, application, args[1:])
 	case "compare":
@@ -96,6 +98,7 @@ Commands:
   local-games           Scan and display the local game library
   scan <CIDR>           Discover PS3 consoles on a private local network
   consoles              List consoles found in the current process
+  add-console --ip <IP> Verify a known PS3 address directly
   games --ip <IP>       List games installed on a PS3
   compare --ip <IP>     Compare the local library with a PS3
   install --ip <IP> <GAME...>
@@ -196,6 +199,27 @@ func (r Runner) consoles(application *app.Service, args []string) error {
 	if len(items) == 0 {
 		fmt.Fprintln(r.Out, "No consoles discovered in this process.")
 	}
+	return nil
+}
+
+func (r Runner) addConsole(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("add-console", r.Err)
+	ip := set.String("ip", "", "known PS3 IPv4 address (required)")
+	jsonOutput := set.Bool("json", false, "print JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *ip == "" {
+		return fmt.Errorf("--ip is required")
+	}
+	console, err := application.AddConsole(ctx, *ip)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return r.printValue(console, true)
+	}
+	fmt.Fprintf(r.Out, "%s  PS3 detected  %d games\n", console.IP, console.GameCount)
 	return nil
 }
 

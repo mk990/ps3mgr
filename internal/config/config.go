@@ -15,6 +15,7 @@ type Config struct {
 	FTPUser       string
 	FTPPassword   string
 	Workers       int
+	ScanTimeout   time.Duration
 	FTPTimeout    time.Duration
 }
 
@@ -26,6 +27,7 @@ func Load() (Config, error) {
 		FTPUser:       env("PS3_FTP_USER", "anonymous"),
 		FTPPassword:   env("PS3_FTP_PASSWORD", ""),
 		Workers:       min(32, max(4, runtime.NumCPU()*2)),
+		ScanTimeout:   500 * time.Millisecond,
 		FTPTimeout:    8 * time.Second,
 	}
 	if raw := os.Getenv("PS3MGR_WORKERS"); raw != "" {
@@ -41,6 +43,13 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("PS3MGR_FTP_TIMEOUT must be a positive duration")
 		}
 		c.FTPTimeout = d
+	}
+	if raw := os.Getenv("PS3MGR_SCAN_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 {
+			return Config{}, fmt.Errorf("PS3MGR_SCAN_TIMEOUT must be a positive duration")
+		}
+		c.ScanTimeout = d
 	}
 	return c, nil
 }

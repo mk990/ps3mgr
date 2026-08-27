@@ -96,6 +96,7 @@ ps3mgr --help
 ps3mgr local-games [--dir /data/games] [--json]
 ps3mgr scan 192.168.1.0/24 [--workers 32] [--json]
 ps3mgr consoles [--json]
+ps3mgr add-console --ip 192.168.1.152 [--json]
 ps3mgr games --ip 192.168.1.152 [--remote-dir /dev_hdd0/GAMES] [--json]
 ps3mgr compare --ip 192.168.1.152 [--dir /data/games] [--json]
 ps3mgr install --ip 192.168.1.152 "PES 2013" "Dead Space 3"
@@ -117,6 +118,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3_FTP_USER` | `anonymous` | FTP username |
 | `PS3_FTP_PASSWORD` | empty | FTP password |
 | `PS3MGR_WORKERS` | based on CPU, maximum 32 | Concurrent network scan workers |
+| `PS3MGR_SCAN_TIMEOUT` | `500ms` | Fast TCP probe timeout for each address |
 | `PS3MGR_FTP_TIMEOUT` | `8s` | FTP operation and connection timeout |
 
 Durations use Go syntax such as `500ms`, `8s`, or `2m`.
@@ -140,6 +142,8 @@ The web panel provides:
 - searchable, sortable, filterable game cards and cover images;
 - select all, select missing, and selection size totals;
 - private CIDR discovery and console selection;
+- direct PS3 IP addition when the address is already known;
+- per-console game refresh that updates installed/missing status;
 - installed/missing comparison using title ID first and normalized title second;
 - live SSE progress, speed, ETA, current file, retry, cancellation, pause-after-current, and clear-completed controls;
 - in-page completion/error toasts and optional browser notifications.
@@ -156,8 +160,10 @@ GET    /api/local-games
 GET    /api/local-games/{id}/icon
 POST   /api/scan
 GET    /api/consoles
+POST   /api/consoles
 GET    /api/consoles/{id}
 GET    /api/consoles/{id}/games
+POST   /api/consoles/{id}/rescan
 GET    /api/compare/{id}
 POST   /api/queue
 GET    /api/queue
@@ -176,6 +182,20 @@ Example scan request:
 curl -X POST http://127.0.0.1:8080/api/scan \
   -H 'Content-Type: application/json' \
   -d '{"cidr":"192.168.1.0/24","workers":32}'
+```
+
+Connect a known PS3 directly:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/consoles \
+  -H 'Content-Type: application/json' \
+  -d '{"ip":"192.168.1.152"}'
+```
+
+Refresh its installed games and comparison:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/consoles/192.168.1.152/rescan
 ```
 
 Example queue request:
@@ -199,6 +219,8 @@ Check that `PS3MGR_GAME_DIR` exists, is a directory, and is readable by the curr
 **The scan finds nothing**
 
 Confirm the CIDR from the computer's network settings, verify that FTP is enabled on the PS3, and try `ps3mgr games --ip <PS3-IP>` to test the known address directly. Discovery deliberately ignores generic FTP servers.
+
+The default TCP probe timeout is `500ms`, independent of the longer FTP timeout. On unusually slow Wi-Fi, increase it with `PS3MGR_SCAN_TIMEOUT=1s`. If the address is already known, use **PS3 Consoles → Add PS3 by IP** instead of scanning.
 
 **Login fails**
 

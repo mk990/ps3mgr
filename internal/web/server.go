@@ -44,8 +44,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/local-games/{id}/icon", s.localIcon)
 	s.mux.HandleFunc("POST /api/scan", s.scan)
 	s.mux.HandleFunc("GET /api/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Consoles()) })
+	s.mux.HandleFunc("POST /api/consoles", s.addConsole)
 	s.mux.HandleFunc("GET /api/consoles/{id}", s.console)
 	s.mux.HandleFunc("GET /api/consoles/{id}/games", s.remoteGames)
+	s.mux.HandleFunc("POST /api/consoles/{id}/rescan", s.rescanConsole)
 	s.mux.HandleFunc("GET /api/compare/{id}", s.compare)
 	s.mux.HandleFunc("POST /api/queue", s.enqueue)
 	s.mux.HandleFunc("GET /api/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Transfers.List()) })
@@ -122,6 +124,37 @@ func (s *Server) console(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, console)
+}
+
+func (s *Server) addConsole(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		IP string `json:"ip"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	console, err := s.app.AddConsole(r.Context(), request.IP)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, console)
+}
+
+func (s *Server) rescanConsole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.app.Console(id); !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("console not found"))
+		return
+	}
+	items, err := s.app.Compare(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	console, _ := s.app.Console(id)
+	writeJSON(w, http.StatusOK, map[string]any{"console": console, "games": items})
 }
 
 func (s *Server) remoteGames(w http.ResponseWriter, r *http.Request) {

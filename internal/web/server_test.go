@@ -14,6 +14,10 @@ import (
 	"ps3mgr/internal/config"
 )
 
+type webDetector struct{}
+
+func (webDetector) Detect(context.Context, string) (bool, int, error) { return true, 4, nil }
+
 func TestHealthLibraryAndValidation(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "Game"), 0o755); err != nil {
@@ -26,6 +30,7 @@ func TestHealthLibraryAndValidation(t *testing.T) {
 		_ = application.Close(ctx)
 	}()
 	handler := New(application).Handler()
+	application.Scanner.Detector = webDetector{}
 	for _, path := range []string{"/api/health", "/api/local-games", "/"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -46,5 +51,17 @@ func TestHealthLibraryAndValidation(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid queue status = %d", response.Code)
+	}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/consoles", strings.NewReader(`{"ip":"127.0.0.1"}`))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("direct console status = %d body=%s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/consoles/127.0.0.2/rescan", nil)
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("unknown rescan status = %d", response.Code)
 	}
 }
