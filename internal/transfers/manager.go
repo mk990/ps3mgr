@@ -337,7 +337,7 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 		value.Percentage = 100
 		value.BytesTransferred = value.TotalBytes
 	})
-	// FTP size checks happen per file during resumable upload; reaching this point verifies every file completed.
+	// FTP size checks happen per file during resumable transfers; reaching this point verifies every file completed.
 	m.update(item.ID, func(value *domain.Transfer) {
 		now := time.Now()
 		value.State = domain.QueueCompleted

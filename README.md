@@ -277,7 +277,7 @@ Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` 
 - The detector confirms PS3 filesystem markers such as `/dev_hdd0` or `/dev_flash`; an arbitrary FTP server is not reported as a PS3.
 - Configure credentials if the FTP server does not allow anonymous access.
 
-The FTP client supports passive mode (EPSV with PASV fallback), binary transfers, directory creation, per-file retries, reconnection, `REST`-based resume where supported, and cancellation. A completed remote file is skipped during a resumed installation.
+The FTP client supports passive mode (EPSV with PASV fallback), binary transfers, directory creation, per-file retries, reconnection, `REST`-based resume where supported, and cancellation. A completed remote file is skipped during a resumed installation. Interrupted console downloads retain their incomplete `.part` files and continue from the saved byte offset when retried; servers without download-resume support safely restart only that file from zero.
 
 ## PS3 transfer behavior
 

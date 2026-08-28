@@ -241,28 +241,83 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 		return err
 	}
 	part := localPath + ".part"
-	file, err := os.Create(part)
+	file, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return err
+	}
+	offset := info.Size()
 	client, err := s.connect(ctx, ip)
 	if err == nil {
-		err = client.Retrieve(ctx, remotePath, file, func(delta int64) {
+		if remoteSize, sizeErr := client.Size(ctx, remotePath); sizeErr == nil {
+			switch {
+			case offset == remoteSize && offset > 0:
+				if progress != nil {
+					progress(Progress{File: filepath.Base(localPath), Delta: offset})
+				}
+				err = nil
+				goto completed
+			case offset > remoteSize:
+				offset = 0
+				if truncateErr := file.Truncate(0); truncateErr != nil {
+					err = truncateErr
+					goto completed
+				}
+			}
+		}
+		if _, seekErr := file.Seek(offset, io.SeekStart); seekErr != nil {
+			err = seekErr
+			goto completed
+		}
+		reportedOffset := false
+		err = client.RetrieveFrom(ctx, remotePath, file, offset, func(delta int64) {
 			if progress != nil {
+				if !reportedOffset && offset > 0 {
+					progress(Progress{File: filepath.Base(localPath), Delta: offset})
+				}
 				progress(Progress{File: filepath.Base(localPath), Delta: delta})
 			}
+			reportedOffset = true
 		})
+		if err == nil && !reportedOffset && offset > 0 && progress != nil {
+			progress(Progress{File: filepath.Base(localPath), Delta: offset})
+		}
+		if errors.Is(err, ErrResumeUnsupported) {
+			client.Close()
+			client = nil
+			offset = 0
+			if truncateErr := file.Truncate(0); truncateErr != nil {
+				err = truncateErr
+				goto completed
+			}
+			if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
+				err = seekErr
+				goto completed
+			}
+			client, err = s.connect(ctx, ip)
+			if err == nil {
+				err = client.Retrieve(ctx, remotePath, file, func(delta int64) {
+					if progress != nil {
+						progress(Progress{File: filepath.Base(localPath), Delta: delta})
+					}
+				})
+			}
+		}
 	}
+
+completed:
 	closeErr := file.Close()
 	if client != nil {
 		client.Close()
 	}
 	if err != nil {
-		_ = os.Remove(part)
 		return fmt.Errorf("download %s: %w", remotePath, err)
 	}
 	if closeErr != nil {
-		_ = os.Remove(part)
 		return closeErr
 	}
 	return os.Rename(part, localPath)

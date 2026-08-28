@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var ErrResumeUnsupported = errors.New("FTP server does not support upload resume")
+var ErrResumeUnsupported = errors.New("FTP server does not support transfer resume")
 
 type Client struct {
 	conn    net.Conn
@@ -191,8 +191,24 @@ func (c *Client) Store(ctx context.Context, remotePath string, source io.Reader,
 
 // Retrieve copies a remote file to destination and reports bytes received.
 func (c *Client) Retrieve(ctx context.Context, remotePath string, destination io.Writer, progress func(int64)) error {
+	return c.RetrieveFrom(ctx, remotePath, destination, 0, progress)
+}
+
+// RetrieveFrom copies a remote file starting at offset to destination and
+// reports bytes received. The caller is responsible for positioning the
+// destination at the same offset.
+func (c *Client) RetrieveFrom(ctx context.Context, remotePath string, destination io.Writer, offset int64, progress func(int64)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if offset > 0 {
+		code, message, err := c.command(ctx, fmt.Sprintf("REST %d", offset))
+		if err != nil {
+			return err
+		}
+		if code != 350 {
+			return fmt.Errorf("%w: %d %s", ErrResumeUnsupported, code, message)
+		}
+	}
 	dataConn, err := c.openPassive(ctx)
 	if err != nil {
 		return err
