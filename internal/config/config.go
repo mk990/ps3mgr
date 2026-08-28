@@ -9,11 +9,16 @@ import (
 )
 
 type Config struct {
-	GameDir          string
+	PS3GameDir       string
 	PS2GameDir       string
 	PS2SystemDir     string
 	PS2USBRoot       string
 	PS2CoverDownload bool
+	PS4GameDir       string
+	PS4RPIPort       int
+	PS4PKGListen     string
+	PS4AdvertiseURL  string
+	PS4RPITimeout    time.Duration
 	PS5GameDir       string
 	PS5RemoteGameDir string
 	PS5FTPPort       int
@@ -30,11 +35,16 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		GameDir:          env("PS3MGR_PS3_GAME_DIR", env("PS3MGR_GAME_DIR", ".")),
+		PS3GameDir:       env("PS3MGR_PS3_GAME_DIR", "."),
 		PS2GameDir:       env("PS3MGR_PS2_GAME_DIR", "./ps2-games"),
 		PS2SystemDir:     env("PS3MGR_PS2_SYSTEM_DIR", "./ps2-system"),
 		PS2USBRoot:       env("PS3MGR_PS2_USB_MOUNT_ROOT", "/mnt/usb"),
 		PS2CoverDownload: true,
+		PS4GameDir:       env("PS3MGR_PS4_GAME_DIR", "./ps4-games"),
+		PS4RPIPort:       12800,
+		PS4PKGListen:     env("PS3MGR_PS4_PKG_LISTEN", "0.0.0.0:8081"),
+		PS4AdvertiseURL:  env("PS3MGR_PS4_ADVERTISE_URL", ""),
+		PS4RPITimeout:    15 * time.Second,
 		PS5GameDir:       env("PS3MGR_PS5_GAME_DIR", "./ps5-games"),
 		PS5RemoteGameDir: env("PS3MGR_PS5_REMOTE_GAME_DIR", "/data/etaHEN/games"),
 		PS5FTPPort:       2121,
@@ -68,6 +78,20 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("PS3MGR_PS5_FTP_PORT must be between 1 and 65535")
 		}
 		c.PS5FTPPort = port
+	}
+	if raw := os.Getenv("PS3MGR_PS4_RPI_PORT"); raw != "" {
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 1 || port > 65535 {
+			return Config{}, fmt.Errorf("PS3MGR_PS4_RPI_PORT must be between 1 and 65535")
+		}
+		c.PS4RPIPort = port
+	}
+	if raw := os.Getenv("PS3MGR_PS4_RPI_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 {
+			return Config{}, fmt.Errorf("PS3MGR_PS4_RPI_TIMEOUT must be a positive duration")
+		}
+		c.PS4RPITimeout = d
 	}
 	if raw := os.Getenv("PS3MGR_FTP_TIMEOUT"); raw != "" {
 		d, err := time.ParseDuration(raw)

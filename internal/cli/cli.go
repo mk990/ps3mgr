@@ -20,6 +20,7 @@ import (
 	"ps3mgr/internal/domain"
 	"ps3mgr/internal/games"
 	"ps3mgr/internal/ps2"
+	"ps3mgr/internal/ps4"
 	ps3web "ps3mgr/internal/web"
 )
 
@@ -78,6 +79,8 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 		commandErr = r.serve(ctx, application, args[1:])
 	case "ps2":
 		commandErr = r.ps2(ctx, application, args[1:])
+	case "ps4":
+		commandErr = r.ps4(ctx, application, args[1:])
 	case "ps5":
 		commandErr = r.ps5(ctx, application, args[1:])
 	default:
@@ -96,13 +99,14 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 }
 
 func (r Runner) help() {
-	fmt.Fprint(r.Out, `PlayStation Manager — PS2 OPL/USB and PS3 FTP workflows
+	fmt.Fprint(r.Out, `PlayStation Manager — isolated PS2, PS3, PS4, and PS5 workflows
 
 Usage:
   ps3mgr <command> [options]
 
 Commands:
   ps2 <command>         Manage PS2 ISOs and OPL USB targets
+  ps4 <command>         Install PS4 PKGs through Remote Package Installer
   ps5 <command>         Manage PS5 ShadowMountPlus games over FTP port 2121
   local-games           Scan and display the local game library
   scan <CIDR>           Discover PS3 consoles on a private local network
@@ -375,7 +379,7 @@ func (r Runner) ps2Queue(application *app.Service, args []string) error {
 
 func (r Runner) localGames(ctx context.Context, application *app.Service, args []string) error {
 	set := newFlagSet("local-games", r.Err)
-	directory := set.String("dir", "", "local game directory (overrides PS3MGR_GAME_DIR)")
+	directory := set.String("dir", "", "local PS3 game directory (overrides PS3MGR_PS3_GAME_DIR)")
 	jsonOutput := set.Bool("json", false, "print JSON")
 	if err := set.Parse(args); err != nil {
 		return err
@@ -638,27 +642,32 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	listen := set.String("listen", application.Config.Listen, "listen address")
 	directory := set.String("dir", "", "local game directory")
 	ps2Directory := set.String("ps2-dir", "", "local PS2 ISO directory")
+	ps4Directory := set.String("ps4-dir", "", "local PS4 PKG directory")
 	ps5Directory := set.String("ps5-dir", "", "local PS5 ShadowMountPlus game directory")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if *directory != "" {
-		application.Config.GameDir = *directory
+		application.Config.PS3GameDir = *directory
 	}
 	if *ps2Directory != "" {
 		application.PS2.GameDir = *ps2Directory
+	}
+	if *ps4Directory != "" {
+		application.PS4.GameDir = *ps4Directory
+		application.PS4.Content.SetRoot(*ps4Directory)
 	}
 	if *ps5Directory != "" {
 		application.PS5.GameDir = *ps5Directory
 	}
 	logger := slog.New(slog.NewTextHandler(r.Out, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logger.Info("[APP] starting PlayStation Manager", "listen", *listen, "ps2_game_dir", application.PS2.GameDir, "ps2_system_dir", application.PS2.SystemDir, "ps2_usb_root", application.Config.PS2USBRoot, "ps2_cover_download", application.Config.PS2CoverDownload, "ps2_cover_cache", filepath.Join(application.PS2.GameDir, "covers"), "ps3_game_dir", application.Config.GameDir, "ps3_remote_dir", application.Config.RemoteGameDir, "ps5_game_dir", application.PS5.GameDir, "ps5_remote_dir", application.PS5.RemoteDir, "ps5_ftp_port", application.PS5.FTP.Port)
+	logger.Info("[APP] starting PlayStation Manager", "listen", *listen, "ps2_game_dir", application.PS2.GameDir, "ps2_system_dir", application.PS2.SystemDir, "ps2_usb_root", application.Config.PS2USBRoot, "ps2_cover_download", application.Config.PS2CoverDownload, "ps2_cover_cache", filepath.Join(application.PS2.GameDir, "covers"), "ps3_game_dir", application.Config.PS3GameDir, "ps3_remote_dir", application.Config.RemoteGameDir, "ps4_game_dir", application.PS4.GameDir, "ps4_rpi_port", application.PS4.RPI.Port, "ps4_pkg_listen", application.PS4.Content.Listen, "ps4_advertise_url", fallback(application.PS4.Content.AdvertiseURL, "not configured"), "ps5_game_dir", application.PS5.GameDir, "ps5_remote_dir", application.PS5.RemoteDir, "ps5_ftp_port", application.PS5.FTP.Port)
 	items, err := application.LocalGames(ctx, "")
 	if err != nil {
 		logger.Error("[PS3] local library scan failed", "error", err)
 		return err
 	}
-	logger.Info("[PS3] local library loaded", "games", len(items), "directory", application.Config.GameDir)
+	logger.Info("[PS3] local library loaded", "games", len(items), "directory", application.Config.PS3GameDir)
 	ps2Count := 0
 	if _, statErr := os.Stat(application.PS2.GameDir); statErr == nil {
 		ps2Items, scanErr := application.PS2.LocalGames(ctx, "")
@@ -673,6 +682,29 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	} else {
 		logger.Error("[PS2] cannot access local library", "directory", application.PS2.GameDir, "error", statErr)
 		return statErr
+	}
+	ps4Count := 0
+	if _, statErr := os.Stat(application.PS4.GameDir); statErr == nil {
+		ps4Items, scanErr := application.PS4.LocalPackages(ctx, "")
+		if scanErr != nil {
+			logger.Error("[PS4] local PKG library scan failed", "error", scanErr)
+			return scanErr
+		}
+		ps4Count = len(ps4Items)
+		logger.Info("[PS4] local PKG library loaded", "packages", ps4Count, "directory", application.PS4.GameDir)
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS4] local PKG library is unavailable", "directory", application.PS4.GameDir, "hint", "set PS3MGR_PS4_GAME_DIR or use --ps4-dir")
+	} else {
+		logger.Error("[PS4] cannot access local PKG library", "directory", application.PS4.GameDir, "error", statErr)
+		return statErr
+	}
+	if application.PS4.Content.AdvertiseURL == "" {
+		logger.Warn("[PS4] package server is not configured; browsing remains available", "required_env", "PS3MGR_PS4_ADVERTISE_URL", "example", "http://192.168.1.20:8081")
+	} else if startErr := application.PS4.Content.Start(); startErr != nil {
+		logger.Error("[PS4] package server failed to start", "listen", application.PS4.Content.Listen, "error", startErr)
+		return startErr
+	} else {
+		logger.Info("[PS4] package server ready", "listen", application.PS4.Content.Listen, "advertise_url", application.PS4.Content.AdvertiseURL)
 	}
 	ps5Count := 0
 	if _, statErr := os.Stat(application.PS5.GameDir); statErr == nil {
@@ -710,7 +742,7 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	logger.Info("[APP] web server ready", "url", "http://"+displayAddress(*listen), "ps2_games", ps2Count, "ps3_games", len(items), "ps5_games", ps5Count, "ps2_games_url", "http://"+displayAddress(*listen)+"/ps2-games", "ps3_games_url", "http://"+displayAddress(*listen)+"/ps3-games", "ps5_games_url", "http://"+displayAddress(*listen)+"/ps5-games")
+	logger.Info("[APP] web server ready", "url", "http://"+displayAddress(*listen), "ps2_games", ps2Count, "ps3_games", len(items), "ps4_packages", ps4Count, "ps5_games", ps5Count, "ps2_games_url", "http://"+displayAddress(*listen)+"/ps2-games", "ps3_games_url", "http://"+displayAddress(*listen)+"/ps3-games", "ps4_games_url", "http://"+displayAddress(*listen)+"/ps4-games", "ps5_games_url", "http://"+displayAddress(*listen)+"/ps5-games")
 	select {
 	case <-ctx.Done():
 		logger.Info("[APP] shutdown requested")
@@ -765,6 +797,34 @@ func logServeEvents(ctx context.Context, logger *slog.Logger, application *app.S
 					}
 				case "ps2.queue.completed":
 					logger.Info("[PS2] queue completed", "summary", event.Payload)
+				case "ps4.scan.started", "ps4.scan.completed":
+					logger.Info("[PS4] "+event.Type, "event", event.Payload)
+				case "ps4.console.connected", "ps4.scan.host_found":
+					if console, ok := event.Payload.(domain.Console); ok {
+						logger.Info("[PS4] console detected", "ip", console.IP, "api_port", console.APIPort)
+					}
+				case "ps4.job.started":
+					if job, ok := event.Payload.(ps4.Job); ok {
+						logger.Info("[PS4] install started", "job_id", job.ID, "package", job.Package.Title, "title_id", job.Package.TitleID, "parts", len(job.Package.Parts), "console_ip", job.ConsoleIP, "attempt", job.Attempts)
+					}
+				case "ps4.pkg.serving":
+					if job, ok := event.Payload.(ps4.Job); ok {
+						logger.Info("[PS4] package available to console", "job_id", job.ID, "package", job.Package.Title, "bytes", job.Package.Size, "parts", len(job.Package.Parts))
+					}
+				case "ps4.install.requested":
+					if job, ok := event.Payload.(ps4.Job); ok {
+						logger.Info("[PS4] Remote Package Installer task created", "job_id", job.ID, "task_id", job.TaskID, "console_ip", job.ConsoleIP)
+					}
+				case "ps4.job.completed":
+					if job, ok := event.Payload.(ps4.Job); ok {
+						logger.Info("[PS4] install completed", "job_id", job.ID, "package", job.Package.Title, "title_id", job.Package.TitleID, "console_ip", job.ConsoleIP, "bytes", job.TotalBytes)
+					}
+				case "ps4.job.failed":
+					if job, ok := event.Payload.(ps4.Job); ok {
+						logger.Error("[PS4] install failed", "job_id", job.ID, "package", job.Package.Title, "console_ip", job.ConsoleIP, "error", job.Error)
+					}
+				case "ps4.queue.completed":
+					logger.Info("[PS4] queue completed", "summary", event.Payload)
 				case "ps5.scan.started", "ps5.scan.completed":
 					logger.Info("[PS5] "+event.Type, "event", event.Payload)
 				case "ps5.console.connected", "ps5.scan.host_found":

@@ -34,6 +34,7 @@ type Console struct {
 	IP        string    `json:"ip"`
 	Platform  Platform  `json:"platform,omitempty"`
 	FTPPort   int       `json:"ftp_port,omitempty"`
+	APIPort   int       `json:"api_port,omitempty"`
 	FTPOnline bool      `json:"ftp_online"`
 	Detected  bool      `json:"detected"`
 	GameCount int       `json:"game_count"`

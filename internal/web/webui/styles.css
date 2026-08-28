@@ -352,8 +352,8 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .status { font-size: 9px; font-weight: 850; letter-spacing: .06em; }
 .status.installed, .status.completed, .status.opl_ready { color: var(--green); }
 .status.not_installed { color: #83a6ff; }
-.status.transferring, .status.queued, .status.id_unknown, .status.paused { color: var(--amber); }
-.status.converting, .status.writing, .status.preparing { color: var(--cyan); }
+.status.transferring, .status.downloading, .status.queued, .status.id_unknown, .status.paused { color: var(--amber); }
+.status.converting, .status.writing, .status.preparing, .status.validating, .status.serving, .status.requesting_install { color: var(--cyan); }
 .status.failed { color: var(--red); }
 
 .console-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
@@ -412,6 +412,7 @@ h3 { margin-bottom: 0; font-size: 18px; }
   color: var(--muted);
 }
 #usbDiscoveryStatus { margin-bottom: 16px; text-align: left; }
+#ps4ContentStatus { margin-bottom: 12px; text-align: left; }
 .compat-note {
   display: grid;
   gap: 7px;
@@ -518,10 +519,23 @@ h3 { margin-bottom: 0; font-size: 18px; }
     border-right: 1px solid var(--line);
     border-bottom: 0;
   }
-  .brand { padding: 0 10px 32px; font-size: 19px; }
+  .brand { flex: 0 0 auto; padding: 0 10px 32px; font-size: 19px; }
   .brand small { font-size: 8px; }
   .brand-mark { width: 38px; height: 38px; font-size: 24px; }
-  .sidebar nav { display: grid; gap: 6px; padding: 0; overflow: visible; }
+  .sidebar nav {
+    display: grid;
+    min-height: 0;
+    align-content: start;
+    flex: 1 1 auto;
+    gap: 6px;
+    padding: 0 4px 12px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+  .sidebar nav::-webkit-scrollbar { width: 6px; }
+  .sidebar nav::-webkit-scrollbar-thumb { border-radius: 10px; background: #34415a; }
   .nav { width: 100%; padding: 12px 14px; }
   .nav > span { display: inline; }
   .nav b { margin-left: auto; }
@@ -536,6 +550,7 @@ h3 { margin-bottom: 0; font-size: 18px; }
   }
   .connection {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: 10px;
     margin-top: auto;

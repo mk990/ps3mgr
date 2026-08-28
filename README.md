@@ -1,6 +1,6 @@
 # PlayStation Manager
 
-PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage, PS3 games through FTP, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
+PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage, PS3 games through FTP, PS4 packages through flatZ Remote Package Installer, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
 
 It replaces the external `bash`, `nmap`, `timeout`, and `lftp` dependencies used by `ps3-games.sh`. The executable contains its FTP client, network scanner, HTTP API, SSE event stream, and web interface.
 
@@ -11,11 +11,14 @@ Go 1.23 or newer is required.
 ```sh
 go build -o ps3mgr ./cmd/ps3mgr
 
-export PS3MGR_GAME_DIR=/data/games
+export PS3MGR_PS3_GAME_DIR=/data/games
 export PS3MGR_PS2_GAME_DIR=/data/ps2
 export PS3MGR_PS2_SYSTEM_DIR=/data/ps2/system
 export PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb
 export PS3MGR_PS2_COVER_DOWNLOAD=true
+export PS3MGR_PS4_GAME_DIR=/data/ps4
+export PS3MGR_PS4_PKG_LISTEN=0.0.0.0:8081
+export PS3MGR_PS4_ADVERTISE_URL=http://192.168.1.20:8081
 export PS3MGR_PS5_GAME_DIR=/data/ps5
 export PS3MGR_PS5_REMOTE_GAME_DIR=/data/etaHEN/games
 export PS3MGR_PS5_FTP_PORT=2121
@@ -24,7 +27,7 @@ export PS3MGR_PS5_FTP_PORT=2121
 
 Open `http://127.0.0.1:8080`. The server binds to localhost by default so it is not accidentally exposed to the LAN.
 
-Platform pages have stable, refresh-safe paths: `/ps2-games`, `/ps2-usb`, `/ps2-queue`, `/ps3-games`, `/ps3-consoles`, `/ps3-scan`, `/ps3-queue`, `/ps5-games`, `/ps5-consoles`, `/ps5-scan`, and `/ps5-queue` (with `/dashboard` for the overview).
+Platform pages have stable, refresh-safe paths: `/ps2-games`, `/ps2-usb`, `/ps2-queue`, `/ps3-games`, `/ps3-consoles`, `/ps3-scan`, `/ps3-queue`, `/ps4-games`, `/ps4-consoles`, `/ps4-scan`, `/ps4-queue`, `/ps5-games`, `/ps5-consoles`, `/ps5-scan`, and `/ps5-queue` (with `/dashboard` for the overview).
 
 ## Docker
 
@@ -37,8 +40,11 @@ docker build \
 
 docker run --rm \
   -p 8080:8080 \
+  -p 8081:8081 \
+  -e PS3MGR_PS4_ADVERTISE_URL=http://192.168.1.20:8081 \
   -v /data/games:/games:ro \
 	-v /data/ps2:/data/ps2 \
+	-v /data/ps4:/data/ps4:ro \
 	-v /data/ps5:/data/ps5:ro \
 	-v /media/ps2-usb:/mnt/usb \
   ps3mgr:dev
@@ -52,7 +58,7 @@ The `/ps2-usb` page reports the mounted filesystem and FAT32 compatibility as `C
 
 If `/ps2-usb` shows no target, inspect `GET /api/ps2/usb/status`. It reports the exact configured root, discovery mode, and inaccessible/skipped paths. After changing a Docker bind mount, recreate the container—Docker cannot add a new host bind mount to an already-created container. A direct bind to `/mnt/usb` appears as `usb-root`; a parent layout exposes child IDs such as `usb0`.
 
-The container listens on `0.0.0.0:8080` and reads games from `/games`. All other environment variables work normally with `docker run -e`.
+The container listens on `0.0.0.0:8080` for the panel and `0.0.0.0:8081` for PS4 PKG downloads. `PS3MGR_PS4_ADVERTISE_URL` is intentionally not given a Docker default because it must contain this host's real LAN IP, not `0.0.0.0`, `localhost`, or the container IP.
 
 On Linux, host networking can make local PS3 discovery more predictable:
 
@@ -62,6 +68,7 @@ docker run --rm \
   -v /data/games:/games:ro \
 	-v /data/ps2:/data/ps2:ro \
 	-v /data/ps2-covers:/data/ps2/covers \
+	-v /data/ps4:/data/ps4:ro \
 	-v /data/ps5:/data/ps5:ro \
 	-v /media/ps2-usb:/mnt/usb \
   ghcr.io/OWNER/ps3mgr:latest
@@ -99,7 +106,7 @@ go build ./...
 
 ## Local library layout
 
-Each immediate child directory of `PS3MGR_GAME_DIR` is treated as one game:
+Each immediate child directory of `PS3MGR_PS3_GAME_DIR` is treated as one game:
 
 ```text
 /data/games/
@@ -145,6 +152,14 @@ ps3mgr ps2 compare --usb usb0 [--json]
 ps3mgr ps2 install --usb usb0 "God of War" "Gran Turismo 4"
 ps3mgr ps2 install --usb usb0 --all
 ps3mgr ps2 queue [--json]
+ps3mgr ps4 --help
+ps3mgr ps4 local-games [--dir /data/ps4] [--json]
+ps3mgr ps4 scan 192.168.1.0/24 [--workers 32] [--json]
+ps3mgr ps4 add-console --ip 192.168.1.154 [--json]
+ps3mgr ps4 compare --ip 192.168.1.154 [--dir /data/ps4] [--json]
+ps3mgr ps4 install --ip 192.168.1.154 "CUSA12345"
+ps3mgr ps4 install --ip 192.168.1.154 --all
+ps3mgr ps4 queue [--json]
 ps3mgr ps5 --help
 ps3mgr ps5 local-games [--dir /data/ps5] [--json]
 ps3mgr ps5 scan 192.168.1.0/24 [--workers 32] [--json]
@@ -173,12 +188,16 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PS3MGR_GAME_DIR` | `.` | Local directory containing game folders |
-| `PS3MGR_PS3_GAME_DIR` | value of `PS3MGR_GAME_DIR` | Preferred generation-specific PS3 game directory override |
+| `PS3MGR_PS3_GAME_DIR` | `.` | Local directory containing PS3 game folders |
 | `PS3MGR_PS2_GAME_DIR` | `./ps2-games` | Recursive local PS2 ISO library |
 | `PS3MGR_PS2_SYSTEM_DIR` | `./ps2-system` | Required OPL/system files copied to a selected USB target |
 | `PS3MGR_PS2_USB_MOUNT_ROOT` | `/mnt/usb` | Parent containing discovered mounted USB directories |
 | `PS3MGR_PS2_COVER_DOWNLOAD` | `true` | Download only missing known-serial covers and cache them locally |
+| `PS3MGR_PS4_GAME_DIR` | `./ps4-games` | Recursive local PS4 `.pkg` library |
+| `PS3MGR_PS4_RPI_PORT` | `12800` | flatZ Remote Package Installer API port on the PS4 |
+| `PS3MGR_PS4_PKG_LISTEN` | `0.0.0.0:8081` | Local HTTP listener used to stream PKGs to the PS4 |
+| `PS3MGR_PS4_ADVERTISE_URL` | empty | Required for installs; HTTP URL with the manager host's LAN IP and package port |
+| `PS3MGR_PS4_RPI_TIMEOUT` | `15s` | Timeout for Remote Package Installer API calls |
 | `PS3MGR_PS5_GAME_DIR` | `./ps5-games` | Recursive local PS5 ShadowMountPlus library |
 | `PS3MGR_PS5_REMOTE_GAME_DIR` | `/data/etaHEN/games` | PS5 FTP installation/library directory |
 | `PS3MGR_PS5_FTP_PORT` | `2121` | etaHEN FTP port used for PS5 scan and transfers |
@@ -194,7 +213,17 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 
 Durations use Go syntax such as `500ms`, `8s`, or `2m`.
 
-`serve` writes structured text logs suitable for Docker collection. Startup logs show configured library/USB paths, separate PS2, PS3, and PS5 game counts, discovered USB capacity, FTP ports, and stable section URLs. Runtime logs cover console discovery and each platform's queue lifecycle with `[PS2]`, `[PS3]`, or `[PS5]` messages. FTP credentials are never logged, and high-frequency progress stays on the event stream instead of flooding stdout.
+`serve` writes structured text logs suitable for Docker collection. Startup logs show configured library/USB paths, separate PS2–PS5 counts, discovered USB capacity, FTP/API ports, PS4 advertised package URL, and stable section URLs. Runtime logs cover console discovery and each platform's queue lifecycle with `[PS2]`, `[PS3]`, `[PS4]`, or `[PS5]` messages. Credentials and tokenized package URLs are never logged, and high-frequency progress stays on the event stream instead of flooding stdout.
+
+## PS4 / Remote Package Installer behavior
+
+Install and run [flatZ Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer) on the PS4. Keep that application open and in focus while the manager sends the initial command; after the task is prepared, it may be minimized. The manager scans port 12800 and verifies the RPI API rather than accepting any open HTTP port.
+
+The local scanner accepts `.pkg` case-insensitively, validates the PS4 PKG magic, reads content/title IDs, classifies game, patch, DLC, and license content, and groups numbered multipart files. Multipart URLs are sent in consecutive order as required by RPI. Invalid files merely renamed to `.pkg` are ignored.
+
+PS4 installation does not upload the package to the console. The manager starts a concurrent HTTP range server, creates an unguessable temporary URL for each selected part, and tells RPI to download those URLs. URLs are revoked after completion or failure and can only resolve files inside `PS3MGR_PS4_GAME_DIR`. The PS4 queue processes one package group at a time and runs independently from the PS2, PS3, and PS5 workers.
+
+`PS3MGR_PS4_PKG_LISTEN` is where the manager binds locally. `PS3MGR_PS4_ADVERTISE_URL` is the address sent to the PS4. For example, with a manager host at `192.168.1.20`, use `0.0.0.0:8081` for the listener and `http://192.168.1.20:8081` for the advertised URL. Allow TCP 8081 through the host firewall and publish that port from Docker. No external CDN, JavaScript, CSS, or image resource is used by the web panel.
 
 ## PS2 / Open PS2 Loader behavior
 
@@ -254,6 +283,22 @@ GET    /api/ps2/queue
 GET    /api/ps2/queue/{id}
 POST   /api/ps2/queue/{id}/cancel
 POST   /api/ps2/queue/{id}/retry
+GET    /api/ps4/games
+POST   /api/ps4/scan
+GET    /api/ps4/consoles
+POST   /api/ps4/consoles
+GET    /api/ps4/consoles/{id}
+POST   /api/ps4/consoles/{id}/rescan
+GET    /api/ps4/compare/{id}
+GET    /api/ps4/content/status
+POST   /api/ps4/queue
+GET    /api/ps4/queue
+GET    /api/ps4/queue/{id}
+POST   /api/ps4/queue/{id}/cancel
+POST   /api/ps4/queue/{id}/retry
+POST   /api/ps4/queue/pause
+POST   /api/ps4/queue/resume
+DELETE /api/ps4/queue/completed
 GET    /api/ps5/games
 GET    /api/ps5/games/{id}/icon
 POST   /api/ps5/scan
@@ -328,7 +373,7 @@ Requests are size-limited and validated. The API does not accept arbitrary FTP c
 
 **The local library does not load**
 
-Check that `PS3MGR_GAME_DIR` exists, is a directory, and is readable by the current user. Run `ps3mgr local-games` to see the contextual filesystem error directly.
+Check that `PS3MGR_PS3_GAME_DIR` exists, is a directory, and is readable by the current user. Run `ps3mgr local-games` to see the contextual filesystem error directly.
 
 **The scan finds nothing**
 

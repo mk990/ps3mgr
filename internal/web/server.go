@@ -77,6 +77,30 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps2/queue/{id}", s.ps2QueueItem)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/cancel", s.ps2Cancel)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/retry", s.ps2Retry)
+	s.mux.HandleFunc("GET /api/ps4/games", s.ps4Games)
+	s.mux.HandleFunc("POST /api/ps4/scan", s.ps4Scan)
+	s.mux.HandleFunc("GET /api/ps4/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Consoles()) })
+	s.mux.HandleFunc("POST /api/ps4/consoles", s.ps4AddConsole)
+	s.mux.HandleFunc("GET /api/ps4/consoles/{id}", s.ps4Console)
+	s.mux.HandleFunc("POST /api/ps4/consoles/{id}/rescan", s.ps4RescanConsole)
+	s.mux.HandleFunc("GET /api/ps4/compare/{id}", s.ps4Compare)
+	s.mux.HandleFunc("GET /api/ps4/content/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.ContentStatus()) })
+	s.mux.HandleFunc("POST /api/ps4/queue", s.ps4Enqueue)
+	s.mux.HandleFunc("GET /api/ps4/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Queue.List()) })
+	s.mux.HandleFunc("GET /api/ps4/queue/{id}", s.ps4QueueItem)
+	s.mux.HandleFunc("POST /api/ps4/queue/{id}/cancel", s.ps4Cancel)
+	s.mux.HandleFunc("POST /api/ps4/queue/{id}/retry", s.ps4Retry)
+	s.mux.HandleFunc("POST /api/ps4/queue/pause", func(w http.ResponseWriter, _ *http.Request) {
+		s.app.PS4.Queue.Pause()
+		writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
+	})
+	s.mux.HandleFunc("POST /api/ps4/queue/resume", func(w http.ResponseWriter, _ *http.Request) {
+		s.app.PS4.Queue.Resume()
+		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
+	})
+	s.mux.HandleFunc("DELETE /api/ps4/queue/completed", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]int{"removed": s.app.PS4.Queue.ClearCompleted()})
+	})
 	s.mux.HandleFunc("GET /api/ps5/games", s.ps5Games)
 	s.mux.HandleFunc("GET /api/ps5/games/{id}/icon", s.ps5Icon)
 	s.mux.HandleFunc("POST /api/ps5/scan", s.ps5Scan)
@@ -104,10 +128,132 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /api/events", s.events)
 	content, _ := fs.Sub(assets, "webui")
-	for _, path := range []string{"/dashboard", "/ps2-games", "/ps2-usb", "/ps2-queue", "/ps3-games", "/ps3-consoles", "/ps3-scan", "/ps3-queue", "/ps5-games", "/ps5-consoles", "/ps5-scan", "/ps5-queue"} {
+	for _, path := range []string{"/dashboard", "/ps2-games", "/ps2-usb", "/ps2-queue", "/ps3-games", "/ps3-consoles", "/ps3-scan", "/ps3-queue", "/ps4-games", "/ps4-consoles", "/ps4-scan", "/ps4-queue", "/ps5-games", "/ps5-consoles", "/ps5-scan", "/ps5-queue"} {
 		s.mux.HandleFunc("GET "+path, s.appShell)
 	}
 	s.mux.Handle("GET /", http.FileServer(http.FS(content)))
+}
+
+func (s *Server) ps4Games(w http.ResponseWriter, r *http.Request) {
+	items, err := s.app.PS4.LocalPackages(r.Context(), "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) ps4Scan(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		CIDR    string `json:"cidr"`
+		Workers int    `json:"workers"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(request.CIDR) == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("cidr is required"))
+		return
+	}
+	items, err := s.app.PS4.Scan(r.Context(), request.CIDR, request.Workers)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) ps4AddConsole(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		IP string `json:"ip"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	console, err := s.app.PS4.AddConsole(r.Context(), request.IP)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, console)
+}
+
+func (s *Server) ps4Console(w http.ResponseWriter, r *http.Request) {
+	console, ok := s.app.PS4.Console(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("PS4 console not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, console)
+}
+
+func (s *Server) ps4Compare(w http.ResponseWriter, r *http.Request) {
+	items, err := s.app.PS4.Compare(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) ps4RescanConsole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.app.PS4.Console(id); !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("PS4 console not found"))
+		return
+	}
+	items, err := s.app.PS4.Compare(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	console, _ := s.app.PS4.Console(id)
+	writeJSON(w, http.StatusOK, map[string]any{"console": console, "games": items})
+}
+
+func (s *Server) ps4Enqueue(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConsoleID   string   `json:"console_id"`
+		PackageIDs  []string `json:"package_ids"`
+		StopOnError bool     `json:"stop_on_error"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := s.app.PS4.Enqueue(request.ConsoleID, request.PackageIDs, request.StopOnError)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, items)
+}
+
+func (s *Server) ps4QueueItem(w http.ResponseWriter, r *http.Request) {
+	item, ok := s.app.PS4.Queue.Get(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("PS4 job not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) ps4Cancel(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Queue.Cancel(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ps4Retry(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Queue.Retry(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) ps5Games(w http.ResponseWriter, r *http.Request) {

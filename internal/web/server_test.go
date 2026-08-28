@@ -23,7 +23,7 @@ func TestHealthLibraryAndValidation(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "Game"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	application := app.New(config.Config{GameDir: root, RemoteGameDir: "/dev_hdd0/GAMES", FTPUser: "anonymous", FTPTimeout: time.Second, Workers: 1})
+	application := app.New(config.Config{PS3GameDir: root, RemoteGameDir: "/dev_hdd0/GAMES", FTPUser: "anonymous", FTPTimeout: time.Second, Workers: 1})
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -31,7 +31,7 @@ func TestHealthLibraryAndValidation(t *testing.T) {
 	}()
 	handler := New(application).Handler()
 	application.Scanner.Detector = webDetector{}
-	for _, path := range []string{"/api/health", "/api/local-games", "/", "/ps2-games", "/ps2-usb", "/ps2-queue", "/ps3-games", "/ps3-consoles", "/ps3-scan", "/ps3-queue", "/ps5-games", "/ps5-consoles", "/ps5-scan", "/ps5-queue"} {
+	for _, path := range []string{"/api/health", "/api/local-games", "/", "/ps2-games", "/ps2-usb", "/ps2-queue", "/ps3-games", "/ps3-consoles", "/ps3-scan", "/ps3-queue", "/ps4-games", "/ps4-consoles", "/ps4-scan", "/ps4-queue", "/ps5-games", "/ps5-consoles", "/ps5-scan", "/ps5-queue"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK {
@@ -88,7 +88,7 @@ func TestPS2APIsUseDiscoveredTargetIDs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(usbRoot, "usb0"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	application := app.New(config.Config{GameDir: ps3Root, PS2GameDir: ps2Root, PS2SystemDir: systemRoot, PS2USBRoot: usbRoot, RemoteGameDir: "/dev_hdd0/GAMES", FTPTimeout: time.Second, Workers: 1})
+	application := app.New(config.Config{PS3GameDir: ps3Root, PS2GameDir: ps2Root, PS2SystemDir: systemRoot, PS2USBRoot: usbRoot, RemoteGameDir: "/dev_hdd0/GAMES", FTPTimeout: time.Second, Workers: 1})
 	defer application.Close(context.Background())
 	handler := New(application).Handler()
 	for _, path := range []string{"/api/ps2/games", "/api/ps2/usb", "/api/ps2/usb/status"} {
@@ -113,12 +113,13 @@ func TestPS2APIsUseDiscoveredTargetIDs(t *testing.T) {
 }
 
 func TestEmptyCollectionAPIsReturnArrays(t *testing.T) {
-	ps3Root, ps2Root, ps5Root := t.TempDir(), t.TempDir(), t.TempDir()
+	ps3Root, ps2Root, ps4Root, ps5Root := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	application := app.New(config.Config{
-		GameDir:       ps3Root,
+		PS3GameDir:    ps3Root,
 		PS2GameDir:    ps2Root,
 		PS2SystemDir:  t.TempDir(),
 		PS2USBRoot:    t.TempDir(),
+		PS4GameDir:    ps4Root,
 		PS5GameDir:    ps5Root,
 		RemoteGameDir: "/dev_hdd0/GAMES",
 		FTPTimeout:    time.Second,
@@ -133,6 +134,9 @@ func TestEmptyCollectionAPIsReturnArrays(t *testing.T) {
 		"/api/consoles",
 		"/api/queue",
 		"/api/ps2/queue",
+		"/api/ps4/games",
+		"/api/ps4/consoles",
+		"/api/ps4/queue",
 		"/api/ps5/games",
 		"/api/ps5/consoles",
 		"/api/ps5/queue",
@@ -163,6 +167,7 @@ func TestGameCardsUseWholeCardSelection(t *testing.T) {
 		`aria-pressed=`,
 		`bindGameCards('.ps2-game-card'`,
 		`bindGameCards('.ps3-game-card'`,
+		`bindGameCards('.ps4-game-card'`,
 		`bindGameCards('.ps5-game-card'`,
 		`event.key==='Enter'||event.key===' '`,
 	} {
@@ -185,6 +190,34 @@ func TestGameCardsUseWholeCardSelection(t *testing.T) {
 	} {
 		if !strings.Contains(css, required) {
 			t.Errorf("mobile-first game-card CSS is missing %q", required)
+		}
+	}
+}
+
+func TestDesktopSidebarKeepsPS5NavigationReachable(t *testing.T) {
+	markup, err := assets.ReadFile("webui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{"ps5games", "ps5consoles", "ps5scan", "ps5queue"} {
+		if !strings.Contains(string(markup), `data-view="`+view+`"`) {
+			t.Errorf("sidebar is missing PS5 view %q", view)
+		}
+	}
+
+	stylesheet, err := assets.ReadFile("webui/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(stylesheet)
+	for _, required := range []string{
+		"min-height: 0",
+		"flex: 1 1 auto",
+		"overflow-y: auto",
+		"overscroll-behavior: contain",
+	} {
+		if !strings.Contains(css, required) {
+			t.Errorf("desktop sidebar scrolling CSS is missing %q", required)
 		}
 	}
 }

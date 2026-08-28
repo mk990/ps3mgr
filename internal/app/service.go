@@ -16,6 +16,7 @@ import (
 	ps3ftp "ps3mgr/internal/ftp"
 	"ps3mgr/internal/games"
 	"ps3mgr/internal/ps2"
+	"ps3mgr/internal/ps4"
 	"ps3mgr/internal/ps5"
 	"ps3mgr/internal/scanner"
 	"ps3mgr/internal/transfers"
@@ -29,6 +30,7 @@ type Service struct {
 	Scanner   *scanner.Scanner
 	Transfers *transfers.Manager
 	PS2       *ps2.Service
+	PS4       *ps4.Service
 	PS5       *ps5.Service
 
 	mu       sync.RWMutex
@@ -54,6 +56,7 @@ func New(cfg config.Config) *Service {
 	service.Scanner = &scanner.Scanner{Detector: ftpService, Workers: cfg.Workers, Timeout: probeTimeout, DetectionTimeout: detectionTimeout}
 	service.Transfers = transfers.New(ftpService, bus, cfg.RemoteGameDir)
 	service.PS2 = ps2.NewService(cfg.PS2GameDir, cfg.PS2SystemDir, cfg.PS2USBRoot, bus)
+	service.PS4 = ps4.NewService(cfg.PS4GameDir, cfg.PS4PKGListen, cfg.PS4AdvertiseURL, cfg.PS4RPIPort, cfg.Workers, cfg.ScanTimeout, cfg.PS4RPITimeout, bus)
 	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
 	if cfg.PS2CoverDownload {
 		service.PS2.Covers = ps2.NewCoverCache()
@@ -62,7 +65,7 @@ func New(cfg config.Config) *Service {
 }
 
 func (s *Service) LocalGames(ctx context.Context, override string) ([]domain.Game, error) {
-	directory := s.Config.GameDir
+	directory := s.Config.PS3GameDir
 	if override != "" {
 		directory = override
 	}
@@ -89,7 +92,7 @@ func (s *Service) LocalIcon(publicID string) (string, bool) {
 	for _, game := range s.local {
 		if games.PublicID(game) == publicID && game.IconPath != "" {
 			clean := filepath.Clean(game.IconPath)
-			root, err1 := filepath.Abs(s.Config.GameDir)
+			root, err1 := filepath.Abs(s.Config.PS3GameDir)
 			absolute, err2 := filepath.Abs(clean)
 			if err1 == nil && err2 == nil {
 				relative, err := filepath.Rel(root, absolute)
@@ -248,12 +251,13 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 }
 
 func (s *Service) Close(ctx context.Context) error {
-	errors := make(chan error, 3)
+	errors := make(chan error, 4)
 	go func() { errors <- s.PS2.Close(ctx) }()
 	go func() { errors <- s.Transfers.Close(ctx) }()
+	go func() { errors <- s.PS4.Close(ctx) }()
 	go func() { errors <- s.PS5.Close(ctx) }()
 	var first error
-	for range 3 {
+	for range 4 {
 		if err := <-errors; err != nil && first == nil {
 			first = err
 		}
