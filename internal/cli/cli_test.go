@@ -4,11 +4,33 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
+
+	"ps3mgr/internal/app"
+	"ps3mgr/internal/config"
+	"ps3mgr/internal/ps2"
 )
+
+type blockingCoverClient struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *blockingCoverClient) Do(request *http.Request) (*http.Response, error) {
+	c.once.Do(func() { close(c.started) })
+	<-request.Context().Done()
+	return nil, request.Context().Err()
+}
 
 func TestHelpAndUnknownCommandExitCodes(t *testing.T) {
 	var output, errors bytes.Buffer
@@ -92,5 +114,76 @@ func TestPS4HelpAndLocalPackageOverride(t *testing.T) {
 	errors.Reset()
 	if code := runner.Run(context.Background(), []string{"ps4", "local-games", "--dir", root}); code != 0 || !strings.Contains(output.String(), "CUSA12345") {
 		t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errors.String())
+	}
+}
+
+func TestServeListensBeforeSlowLibraryInitialization(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			t.Skip("sandbox does not permit local TCP listeners")
+		}
+		t.Fatal(err)
+	}
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ps2Root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ps2Root, "SCES_517.19.Game.iso"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := app.New(config.Config{
+		PS3GameDir:       t.TempDir(),
+		PS2GameDir:       ps2Root,
+		PS2SystemDir:     t.TempDir(),
+		PS2USBRoot:       t.TempDir(),
+		PS2CoverDownload: true,
+		PS4GameDir:       t.TempDir(),
+		PS5GameDir:       t.TempDir(),
+		RemoteGameDir:    "/dev_hdd0/GAMES",
+		Workers:          1,
+		FTPTimeout:       time.Second,
+	})
+	coverClient := &blockingCoverClient{started: make(chan struct{})}
+	application.PS2.Covers = &ps2.CoverCache{Client: coverClient, Workers: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- (Runner{Out: io.Discard, Err: io.Discard}).serve(ctx, application, []string{"--listen", address})
+	}()
+
+	select {
+	case <-coverClient.started:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("slow startup scan did not begin")
+	}
+
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Get("http://" + address + "/api/health")
+	if err != nil {
+		cancel()
+		t.Fatalf("health endpoint was unavailable during startup scan: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		cancel()
+		t.Fatalf("health status during startup scan = %d", response.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("serve shutdown: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve did not stop after cancellation")
+	}
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

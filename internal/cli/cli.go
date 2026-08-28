@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -662,77 +663,6 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	}
 	logger := slog.New(slog.NewTextHandler(r.Out, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("[APP] starting PlayStation Manager", "listen", *listen, "ps2_game_dir", application.PS2.GameDir, "ps2_system_dir", application.PS2.SystemDir, "ps2_usb_root", application.Config.PS2USBRoot, "ps2_cover_download", application.Config.PS2CoverDownload, "ps2_cover_cache", filepath.Join(application.PS2.GameDir, "covers"), "ps3_game_dir", application.Config.PS3GameDir, "ps3_remote_dir", application.Config.RemoteGameDir, "ps4_game_dir", application.PS4.GameDir, "ps4_rpi_port", application.PS4.RPI.Port, "ps4_pkg_listen", application.PS4.Content.Listen, "ps4_advertise_url", fallback(application.PS4.Content.AdvertiseURL, "not configured"), "ps5_game_dir", application.PS5.GameDir, "ps5_remote_dir", application.PS5.RemoteDir, "ps5_ftp_port", application.PS5.FTP.Port)
-	items, err := application.LocalGames(ctx, "")
-	if err != nil {
-		logger.Error("[PS3] local library scan failed", "error", err)
-		return err
-	}
-	logger.Info("[PS3] local library loaded", "games", len(items), "directory", application.Config.PS3GameDir)
-	ps2Count := 0
-	if _, statErr := os.Stat(application.PS2.GameDir); statErr == nil {
-		ps2Items, scanErr := application.PS2.LocalGames(ctx, "")
-		if scanErr != nil {
-			logger.Error("[PS2] local library scan failed", "error", scanErr)
-			return scanErr
-		}
-		ps2Count = len(ps2Items)
-		logger.Info("[PS2] local library loaded", "games", ps2Count, "directory", application.PS2.GameDir)
-	} else if os.IsNotExist(statErr) {
-		logger.Warn("[PS2] local library is unavailable", "directory", application.PS2.GameDir, "hint", "set PS3MGR_PS2_GAME_DIR or use --ps2-dir")
-	} else {
-		logger.Error("[PS2] cannot access local library", "directory", application.PS2.GameDir, "error", statErr)
-		return statErr
-	}
-	ps4Count := 0
-	if _, statErr := os.Stat(application.PS4.GameDir); statErr == nil {
-		ps4Items, scanErr := application.PS4.LocalPackages(ctx, "")
-		if scanErr != nil {
-			logger.Error("[PS4] local PKG library scan failed", "error", scanErr)
-			return scanErr
-		}
-		ps4Count = len(ps4Items)
-		logger.Info("[PS4] local PKG library loaded", "packages", ps4Count, "directory", application.PS4.GameDir)
-	} else if os.IsNotExist(statErr) {
-		logger.Warn("[PS4] local PKG library is unavailable", "directory", application.PS4.GameDir, "hint", "set PS3MGR_PS4_GAME_DIR or use --ps4-dir")
-	} else {
-		logger.Error("[PS4] cannot access local PKG library", "directory", application.PS4.GameDir, "error", statErr)
-		return statErr
-	}
-	if application.PS4.Content.AdvertiseURL == "" {
-		logger.Warn("[PS4] package server is not configured; browsing remains available", "required_env", "PS3MGR_PS4_ADVERTISE_URL", "example", "http://192.168.1.20:8081")
-	} else if startErr := application.PS4.Content.Start(); startErr != nil {
-		logger.Error("[PS4] package server failed to start", "listen", application.PS4.Content.Listen, "error", startErr)
-		return startErr
-	} else {
-		logger.Info("[PS4] package server ready", "listen", application.PS4.Content.Listen, "advertise_url", application.PS4.Content.AdvertiseURL)
-	}
-	ps5Count := 0
-	if _, statErr := os.Stat(application.PS5.GameDir); statErr == nil {
-		ps5Items, scanErr := application.PS5.LocalGames(ctx, "")
-		if scanErr != nil {
-			logger.Error("[PS5] local library scan failed", "error", scanErr)
-			return scanErr
-		}
-		ps5Count = len(ps5Items)
-		logger.Info("[PS5] local library loaded", "games", ps5Count, "directory", application.PS5.GameDir, "formats", "folder,ffpfsc,exfat,ffpkg,ffpfs")
-	} else if os.IsNotExist(statErr) {
-		logger.Warn("[PS5] local library is unavailable", "directory", application.PS5.GameDir, "hint", "set PS3MGR_PS5_GAME_DIR or use --ps5-dir")
-	} else {
-		logger.Error("[PS5] cannot access local library", "directory", application.PS5.GameDir, "error", statErr)
-		return statErr
-	}
-	discovery, usbErr := application.PS2.USBDiscovery()
-	if usbErr != nil {
-		logger.Warn("[PS2] USB discovery failed", "root", application.Config.PS2USBRoot, "error", usbErr)
-	} else {
-		logger.Info("[PS2] USB discovery completed", "targets", len(discovery.Targets), "root", discovery.Root, "mode", discovery.Mode, "issues", len(discovery.Issues))
-		for _, issue := range discovery.Issues {
-			logger.Warn("[PS2] USB discovery issue", "path", issue.Path, "reason", issue.Reason)
-		}
-		for _, target := range discovery.Targets {
-			logger.Info("[PS2] USB target available", "usb_id", target.ID, "mount", target.MountPath, "filesystem", target.Filesystem, "fat32_status", target.FAT32Status, "free_bytes", target.FreeBytes, "read_only", target.ReadOnly, "opl_ready", target.OPLReady)
-		}
-	}
 	stopEventLogs := logServeEvents(ctx, logger, application)
 	defer stopEventLogs()
 	handler := ps3web.New(application).Handler()
@@ -740,9 +670,18 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 		Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
 	}
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", *listen, err)
+	}
 	serverErrors := make(chan error, 1)
-	go func() { serverErrors <- server.ListenAndServe() }()
-	logger.Info("[APP] web server ready", "url", "http://"+displayAddress(*listen), "ps2_games", ps2Count, "ps3_games", len(items), "ps4_packages", ps4Count, "ps5_games", ps5Count, "ps2_games_url", "http://"+displayAddress(*listen)+"/ps2-games", "ps3_games_url", "http://"+displayAddress(*listen)+"/ps3-games", "ps4_games_url", "http://"+displayAddress(*listen)+"/ps4-games", "ps5_games_url", "http://"+displayAddress(*listen)+"/ps5-games")
+	go func() { serverErrors <- server.Serve(listener) }()
+	logger.Info("[APP] web server ready", "url", "http://"+displayAddress(*listen), "health_url", "http://"+displayAddress(*listen)+"/api/health", "ps2_games_url", "http://"+displayAddress(*listen)+"/ps2-games", "ps3_games_url", "http://"+displayAddress(*listen)+"/ps3-games", "ps4_games_url", "http://"+displayAddress(*listen)+"/ps4-games", "ps5_games_url", "http://"+displayAddress(*listen)+"/ps5-games")
+
+	startupCtx, cancelStartup := context.WithCancel(ctx)
+	defer cancelStartup()
+	go initializeServe(startupCtx, logger, application)
+
 	select {
 	case <-ctx.Done():
 		logger.Info("[APP] shutdown requested")
@@ -761,6 +700,95 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 		}
 		return err
 	}
+}
+
+func initializeServe(ctx context.Context, logger *slog.Logger, application *app.Service) {
+	started := time.Now()
+	ps3Count := 0
+	if items, err := application.LocalGames(ctx, ""); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		logger.Error("[PS3] local library scan failed; panel remains available", "directory", application.Config.PS3GameDir, "error", err)
+	} else {
+		ps3Count = len(items)
+		logger.Info("[PS3] local library loaded", "games", ps3Count, "directory", application.Config.PS3GameDir)
+	}
+
+	ps2Count := 0
+	if _, statErr := os.Stat(application.PS2.GameDir); statErr == nil {
+		ps2Items, scanErr := application.PS2.LocalGames(ctx, "")
+		if scanErr != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Error("[PS2] local library scan failed; panel remains available", "directory", application.PS2.GameDir, "error", scanErr)
+		} else {
+			ps2Count = len(ps2Items)
+			logger.Info("[PS2] local library loaded", "games", ps2Count, "directory", application.PS2.GameDir)
+		}
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS2] local library is unavailable", "directory", application.PS2.GameDir, "hint", "set PS3MGR_PS2_GAME_DIR or use --ps2-dir")
+	} else {
+		logger.Error("[PS2] cannot access local library; panel remains available", "directory", application.PS2.GameDir, "error", statErr)
+	}
+
+	ps4Count := 0
+	if _, statErr := os.Stat(application.PS4.GameDir); statErr == nil {
+		ps4Items, scanErr := application.PS4.LocalPackages(ctx, "")
+		if scanErr != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Error("[PS4] local PKG library scan failed; panel remains available", "directory", application.PS4.GameDir, "error", scanErr)
+		} else {
+			ps4Count = len(ps4Items)
+			logger.Info("[PS4] local PKG library loaded", "packages", ps4Count, "directory", application.PS4.GameDir)
+		}
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS4] local PKG library is unavailable", "directory", application.PS4.GameDir, "hint", "set PS3MGR_PS4_GAME_DIR or use --ps4-dir")
+	} else {
+		logger.Error("[PS4] cannot access local PKG library; panel remains available", "directory", application.PS4.GameDir, "error", statErr)
+	}
+	if application.PS4.Content.AdvertiseURL == "" {
+		logger.Warn("[PS4] package server is not configured; browsing remains available", "required_env", "PS3MGR_PS4_ADVERTISE_URL", "example", "http://192.168.1.20:8081")
+	} else if startErr := application.PS4.Content.Start(); startErr != nil {
+		logger.Error("[PS4] package server failed to start; panel remains available", "listen", application.PS4.Content.Listen, "error", startErr)
+	} else {
+		logger.Info("[PS4] package server ready", "listen", application.PS4.Content.Listen, "advertise_url", application.PS4.Content.AdvertiseURL)
+	}
+
+	ps5Count := 0
+	if _, statErr := os.Stat(application.PS5.GameDir); statErr == nil {
+		ps5Items, scanErr := application.PS5.LocalGames(ctx, "")
+		if scanErr != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Error("[PS5] local library scan failed; panel remains available", "directory", application.PS5.GameDir, "error", scanErr)
+		} else {
+			ps5Count = len(ps5Items)
+			logger.Info("[PS5] local library loaded", "games", ps5Count, "directory", application.PS5.GameDir, "formats", "folder,ffpfsc,exfat,ffpkg,ffpfs")
+		}
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS5] local library is unavailable", "directory", application.PS5.GameDir, "hint", "set PS3MGR_PS5_GAME_DIR or use --ps5-dir")
+	} else {
+		logger.Error("[PS5] cannot access local library; panel remains available", "directory", application.PS5.GameDir, "error", statErr)
+	}
+
+	discovery, usbErr := application.PS2.USBDiscovery()
+	if usbErr != nil {
+		logger.Warn("[PS2] USB discovery failed", "root", application.Config.PS2USBRoot, "error", usbErr)
+	} else {
+		logger.Info("[PS2] USB discovery completed", "targets", len(discovery.Targets), "root", discovery.Root, "mode", discovery.Mode, "issues", len(discovery.Issues))
+		for _, issue := range discovery.Issues {
+			logger.Warn("[PS2] USB discovery issue", "path", issue.Path, "reason", issue.Reason)
+		}
+		for _, target := range discovery.Targets {
+			logger.Info("[PS2] USB target available", "usb_id", target.ID, "mount", target.MountPath, "filesystem", target.Filesystem, "fat32_status", target.FAT32Status, "free_bytes", target.FreeBytes, "read_only", target.ReadOnly, "opl_ready", target.OPLReady)
+		}
+	}
+	logger.Info("[APP] startup discovery completed", "duration", time.Since(started).Round(time.Millisecond), "ps2_games", ps2Count, "ps3_games", ps3Count, "ps4_packages", ps4Count, "ps5_games", ps5Count)
 }
 
 func logServeEvents(ctx context.Context, logger *slog.Logger, application *app.Service) func() {
