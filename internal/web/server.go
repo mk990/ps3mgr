@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"ps3mgr/internal/app"
+	"ps3mgr/internal/domain"
+	"ps3mgr/internal/transfers"
 )
 
 //go:embed webui/*
@@ -19,6 +21,13 @@ var assets embed.FS
 type Server struct {
 	app *app.Service
 	mux *http.ServeMux
+}
+
+func managerList(manager *transfers.Manager) []domain.Transfer {
+	if manager == nil {
+		return []domain.Transfer{}
+	}
+	return manager.List()
 }
 
 func New(application *app.Service) *Server {
@@ -52,9 +61,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/compare/{id}", s.compare)
 	s.mux.HandleFunc("POST /api/queue", s.enqueue)
 	s.mux.HandleFunc("POST /api/pull", s.pull)
-	s.mux.HandleFunc("GET /api/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Pulls.List()) })
+	s.mux.HandleFunc("GET /api/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, managerList(s.app.Pulls)) })
 	s.mux.HandleFunc("GET /api/queue", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, append(s.app.Transfers.List(), s.app.Pulls.List()...))
+		writeJSON(w, http.StatusOK, append(managerList(s.app.Transfers), managerList(s.app.Pulls)...))
 	})
 	s.mux.HandleFunc("GET /api/queue/{id}", s.queueItem)
 	s.mux.HandleFunc("POST /api/queue/{id}/cancel", s.cancel)
@@ -98,7 +107,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps4/content/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.ContentStatus()) })
 	s.mux.HandleFunc("POST /api/ps4/queue", s.ps4Enqueue)
 	s.mux.HandleFunc("POST /api/ps4/pull", s.ps4Pull)
-	s.mux.HandleFunc("GET /api/ps4/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Pulls.List()) })
+	s.mux.HandleFunc("GET /api/ps4/pull-queue", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, managerList(s.app.PS4.Pulls))
+	})
 	s.mux.HandleFunc("POST /api/ps4/pull-queue/{id}/cancel", s.ps4PullCancel)
 	s.mux.HandleFunc("POST /api/ps4/pull-queue/{id}/retry", s.ps4PullRetry)
 	s.mux.HandleFunc("GET /api/ps4/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Queue.List()) })
@@ -127,9 +138,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps5/compare/{id}", s.ps5Compare)
 	s.mux.HandleFunc("POST /api/ps5/queue", s.ps5Enqueue)
 	s.mux.HandleFunc("POST /api/ps5/pull", s.ps5Pull)
-	s.mux.HandleFunc("GET /api/ps5/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Pulls.List()) })
+	s.mux.HandleFunc("GET /api/ps5/pull-queue", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, managerList(s.app.PS5.Pulls))
+	})
 	s.mux.HandleFunc("GET /api/ps5/queue", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, append(s.app.PS5.Transfers.List(), s.app.PS5.Pulls.List()...))
+		writeJSON(w, http.StatusOK, append(managerList(s.app.PS5.Transfers), managerList(s.app.PS5.Pulls)...))
 	})
 	s.mux.HandleFunc("GET /api/ps5/queue/{id}", s.ps5QueueItem)
 	s.mux.HandleFunc("POST /api/ps5/queue/{id}/cancel", s.ps5Cancel)
