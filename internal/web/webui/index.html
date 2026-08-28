@@ -52,7 +52,7 @@
       </section>
 
       <section id="ps2games" class="view">
-        <p class="offline-note"><strong>Local cover cache:</strong> missing serial covers are downloaded once into <code>covers/</code>. Existing files are always reused and every card image is served locally.</p>
+        <p id="ps2CoverStatus" class="offline-note"><strong>Local cover cache:</strong> checking the configured container path…</p>
         <div class="toolbar"><label class="search"><span>⌕</span><input id="ps2Search" placeholder="Search PS2 titles or game IDs…"></label><select id="ps2Filter"><option value="all">All games</option><option value="missing">Missing on USB</option><option value="installed">Installed on USB</option></select><select id="ps2Sort"><option value="title">Sort: Title</option><option value="size">Sort: Size</option></select></div>
         <div class="selection-bar"><div class="selection-shortcuts"><button id="ps2SelectAll" class="text-button">Select all</button><button id="ps2SelectMissing" class="text-button">Select missing</button><button id="ps2SelectNone" class="text-button">Select none</button></div><div class="selection-summary"><strong id="ps2SelectionCount" aria-live="polite">0 games selected</strong><span id="ps2SelectionSize">0 B</span><select id="ps2Target" aria-label="PS2 USB target"><option value="">Select USB target…</option></select><button id="ps2InstallSelected" class="button primary" disabled>Install selected</button></div></div>
         <div id="ps2GameGrid" class="game-grid"><div class="loading">Loading PS2 ISO library…</div></div>

@@ -121,6 +121,14 @@ func (s *Service) CachedGames() []Game {
 	defer s.mu.RUnlock()
 	return copyGames(s.games)
 }
+
+func (s *Service) CoverStatus() CoverStatus {
+	if s.Covers == nil {
+		return CoverStatus{GameDir: s.GameDir, CacheDir: filepath.Join(s.GameDir, "covers")}
+	}
+	return s.Covers.Status(s.GameDir)
+}
+
 func (s *Service) Game(id string) (Game, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

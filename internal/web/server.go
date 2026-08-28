@@ -68,6 +68,9 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /api/ps2/games", s.ps2Games)
 	s.mux.HandleFunc("GET /api/ps2/games/{id}/cover", s.ps2Cover)
+	s.mux.HandleFunc("GET /api/ps2/covers/status", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.app.PS2.CoverStatus())
+	})
 	s.mux.HandleFunc("GET /api/ps2/usb", s.ps2USB)
 	s.mux.HandleFunc("GET /api/ps2/usb/status", s.ps2USBStatus)
 	s.mux.HandleFunc("POST /api/ps2/usb/{id}/prepare", s.ps2PrepareUSB)

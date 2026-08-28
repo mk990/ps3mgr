@@ -140,6 +140,15 @@ The downloaded cache uses `covers/<SERIAL>.jpg`. Existing files always take prio
 
 Only current games with known serials are requested. Downloads are bounded, validated as JPEG/PNG, and committed atomically; failures leave the game visible with its built-in placeholder. Set `PS3MGR_PS2_COVER_DOWNLOAD=false` to prohibit new downloads and use cached/manual images only. Once cached, covers work without internet access. The browser never receives a remote image URL: the embedded UI serves CSS, JavaScript, covers, and API calls from the application origin under a same-origin content security policy.
 
+The cache path is derived from the path inside the container. If the host library is `/srv/games/ps2` and it is mounted at `/library/ps2`, configure both values consistently:
+
+```text
+-v /srv/games/ps2:/library/ps2
+-e PS3MGR_PS2_GAME_DIR=/library/ps2
+```
+
+The container runs as non-root UID `65532`, so that bind mount must permit UID `65532` to create and write `/library/ps2/covers`. The PS2 Games page reports the resolved container cache path and any permission error.
+
 ## Commands
 
 ```text

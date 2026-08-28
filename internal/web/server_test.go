@@ -98,6 +98,11 @@ func TestPS2APIsUseDiscoveredTargetIDs(t *testing.T) {
 			t.Fatalf("GET %s = %d: %s", path, response.Code, response.Body.String())
 		}
 	}
+	coverResponse := httptest.NewRecorder()
+	handler.ServeHTTP(coverResponse, httptest.NewRequest(http.MethodGet, "/api/ps2/covers/status", nil))
+	if coverResponse.Code != http.StatusOK || !strings.Contains(coverResponse.Body.String(), filepath.Join(ps2Root, "covers")) {
+		t.Fatalf("cover status = %d: %s", coverResponse.Code, coverResponse.Body.String())
+	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/ps2/usb/usb0/prepare", nil))
 	if response.Code != http.StatusOK {

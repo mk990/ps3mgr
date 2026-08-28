@@ -77,3 +77,35 @@ func TestCoverCacheRejectsNonImageResponse(t *testing.T) {
 		t.Fatalf("invalid response left cache files: %#v", entries)
 	}
 }
+
+func TestCoverCacheCreatesConfiguredDirectoryBeforeAnyDownload(t *testing.T) {
+	root := t.TempDir()
+	cache := &CoverCache{}
+	downloaded, failures := cache.Populate(context.Background(), root, nil)
+	if downloaded != 0 || len(failures) != 0 {
+		t.Fatalf("downloaded=%d failures=%#v", downloaded, failures)
+	}
+	cacheRoot := filepath.Join(root, "covers")
+	info, err := os.Stat(cacheRoot)
+	if err != nil {
+		t.Fatalf("configured cache was not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("cache path is not a directory: %s", cacheRoot)
+	}
+	status := cache.Status(root)
+	if !status.Enabled || !status.Available || !status.Writable || status.CacheDir != cacheRoot {
+		t.Fatalf("unexpected cache status: %#v", status)
+	}
+}
+
+func TestCoverCacheDoesNotCreateMissingGameDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-library")
+	status := (&CoverCache{}).Status(root)
+	if status.Available || status.Error == "" {
+		t.Fatalf("unexpected cache status: %#v", status)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("missing game directory was created, stat error: %v", err)
+	}
+}

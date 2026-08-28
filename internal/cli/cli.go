@@ -717,6 +717,15 @@ func initializeServe(ctx context.Context, logger *slog.Logger, application *app.
 
 	ps2Count := 0
 	if _, statErr := os.Stat(application.PS2.GameDir); statErr == nil {
+		coverStatus := application.PS2.CoverStatus()
+		switch {
+		case !coverStatus.Enabled:
+			logger.Info("[PS2] cover downloads disabled", "cache", coverStatus.CacheDir)
+		case coverStatus.Error != "":
+			logger.Error("[PS2] cover cache unavailable; check Docker bind-mount ownership", "game_directory", coverStatus.GameDir, "cache", coverStatus.CacheDir, "error", coverStatus.Error)
+		default:
+			logger.Info("[PS2] cover cache ready", "cache", coverStatus.CacheDir, "cached_images", coverStatus.Images, "writable", coverStatus.Writable)
+		}
 		ps2Items, scanErr := application.PS2.LocalGames(ctx, "")
 		if scanErr != nil {
 			if ctx.Err() != nil {

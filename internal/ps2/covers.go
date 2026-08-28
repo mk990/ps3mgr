@@ -32,6 +32,16 @@ type CoverFailure struct {
 	Reason string `json:"reason"`
 }
 
+type CoverStatus struct {
+	Enabled   bool   `json:"enabled"`
+	GameDir   string `json:"game_dir"`
+	CacheDir  string `json:"cache_dir"`
+	Available bool   `json:"available"`
+	Writable  bool   `json:"writable"`
+	Images    int    `json:"images"`
+	Error     string `json:"error,omitempty"`
+}
+
 type coverJob struct {
 	index int
 	game  Game
@@ -59,13 +69,65 @@ func NewCoverCache() *CoverCache {
 	return &CoverCache{Client: client, BaseURL: defaultCoverBaseURL, Workers: 6, MaxBytes: defaultCoverMaxBytes}
 }
 
+// Ensure prepares and verifies the cache below the configured PS2 library.
+// The probe catches read-only or incorrectly owned Docker bind mounts before
+// the first download, while leaving no diagnostic file behind.
+func (c *CoverCache) Ensure(root string) (string, error) {
+	cacheRoot := filepath.Join(root, "covers")
+	info, err := os.Stat(root)
+	if err != nil {
+		return cacheRoot, fmt.Errorf("access PS2 game directory %q: %w", root, err)
+	}
+	if !info.IsDir() {
+		return cacheRoot, fmt.Errorf("PS2 game path is not a directory: %s", root)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		return cacheRoot, fmt.Errorf("create cover cache %q: %w", cacheRoot, err)
+	}
+	probe, err := os.CreateTemp(cacheRoot, ".ps3mgr-write-test-*")
+	if err != nil {
+		return cacheRoot, fmt.Errorf("cover cache is not writable %q: %w", cacheRoot, err)
+	}
+	probePath := probe.Name()
+	if closeErr := probe.Close(); closeErr != nil {
+		_ = os.Remove(probePath)
+		return cacheRoot, fmt.Errorf("verify cover cache %q: %w", cacheRoot, closeErr)
+	}
+	if err = os.Remove(probePath); err != nil {
+		return cacheRoot, fmt.Errorf("clean cover cache probe %q: %w", probePath, err)
+	}
+	return cacheRoot, nil
+}
+
+func (c *CoverCache) Status(root string) CoverStatus {
+	status := CoverStatus{Enabled: c != nil, GameDir: root, CacheDir: filepath.Join(root, "covers")}
+	if c == nil {
+		return status
+	}
+	cacheRoot, err := c.Ensure(root)
+	status.CacheDir = cacheRoot
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.Available, status.Writable = true, true
+	status.Images = len(indexCovers(cacheRoot))
+	return status
+}
+
 // Populate downloads only covers that are missing from the local cache. The
 // returned games always reference local files and same-origin API URLs.
 func (c *CoverCache) Populate(ctx context.Context, root string, games []Game) (int, []CoverFailure) {
-	if c == nil || len(games) == 0 {
+	if c == nil {
 		return 0, nil
 	}
-	cacheRoot := filepath.Join(root, "covers")
+	cacheRoot, err := c.Ensure(root)
+	if err != nil {
+		return 0, []CoverFailure{{Reason: err.Error()}}
+	}
+	if len(games) == 0 {
+		return 0, nil
+	}
 	existing := indexCovers(cacheRoot)
 	jobs := make([]coverJob, 0, len(games))
 	for i := range games {
@@ -172,9 +234,6 @@ func (c *CoverCache) download(ctx context.Context, cacheRoot, gameID string) (st
 		extension = ".png"
 	default:
 		return "", fmt.Errorf("cover response is not a JPEG or PNG image")
-	}
-	if err = os.MkdirAll(cacheRoot, 0o755); err != nil {
-		return "", fmt.Errorf("create cover cache %q: %w", cacheRoot, err)
 	}
 	destination := filepath.Join(cacheRoot, gameID+extension)
 	temporary, err := os.CreateTemp(cacheRoot, "."+gameID+"-*.partial")
