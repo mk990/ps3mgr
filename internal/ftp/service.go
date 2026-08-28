@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,6 +23,7 @@ type Service struct {
 	Password   string
 	Timeout    time.Duration
 	RemoteRoot string
+	Port       string
 }
 
 type Progress struct {
@@ -30,7 +32,11 @@ type Progress struct {
 }
 
 func (s *Service) connect(ctx context.Context, ip string) (*Client, error) {
-	return Dial(ctx, ip, s.User, s.Password, s.Timeout)
+	endpoint := ip
+	if s.Port != "" {
+		endpoint = net.JoinHostPort(ip, s.Port)
+	}
+	return Dial(ctx, endpoint, s.User, s.Password, s.Timeout)
 }
 
 func (s *Service) Detect(ctx context.Context, ip string) (bool, int, error) {
@@ -91,10 +97,26 @@ func (s *Service) UploadGame(ctx context.Context, ip string, game domain.Game, r
 		return fmt.Errorf("game %q has no local path", game.Title)
 	}
 	info, err := os.Stat(game.LocalPath)
-	if err != nil || !info.IsDir() {
+	if err != nil {
 		return fmt.Errorf("access local game %q: %w", game.Title, err)
 	}
 	target := path.Join(remoteRoot, filepath.Base(game.LocalPath))
+	if info.Mode().IsRegular() {
+		var reported int64
+		return s.uploadFile(ctx, ip, game.LocalPath, target, func(completed int64) {
+			if completed <= reported {
+				return
+			}
+			delta := completed - reported
+			reported = completed
+			if progress != nil {
+				progress(Progress{File: filepath.Base(game.LocalPath), Delta: delta})
+			}
+		})
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("local game %q is neither a regular file nor directory", game.Title)
+	}
 	return filepath.WalkDir(game.LocalPath, func(localPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

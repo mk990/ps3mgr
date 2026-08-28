@@ -15,6 +15,8 @@ import (
 	"ps3mgr/internal/events"
 	ps3ftp "ps3mgr/internal/ftp"
 	"ps3mgr/internal/games"
+	"ps3mgr/internal/ps2"
+	"ps3mgr/internal/ps5"
 	"ps3mgr/internal/scanner"
 	"ps3mgr/internal/transfers"
 )
@@ -26,6 +28,8 @@ type Service struct {
 	FTP       *ps3ftp.Service
 	Scanner   *scanner.Scanner
 	Transfers *transfers.Manager
+	PS2       *ps2.Service
+	PS5       *ps5.Service
 
 	mu       sync.RWMutex
 	local    []domain.Game
@@ -49,6 +53,11 @@ func New(cfg config.Config) *Service {
 	}
 	service.Scanner = &scanner.Scanner{Detector: ftpService, Workers: cfg.Workers, Timeout: probeTimeout, DetectionTimeout: detectionTimeout}
 	service.Transfers = transfers.New(ftpService, bus, cfg.RemoteGameDir)
+	service.PS2 = ps2.NewService(cfg.PS2GameDir, cfg.PS2SystemDir, cfg.PS2USBRoot, bus)
+	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
+	if cfg.PS2CoverDownload {
+		service.PS2.Covers = ps2.NewCoverCache()
+	}
 	return service
 }
 
@@ -238,9 +247,28 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 	return s.Transfers.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
 }
 
-func (s *Service) Close(ctx context.Context) error { return s.Transfers.Close(ctx) }
+func (s *Service) Close(ctx context.Context) error {
+	errors := make(chan error, 3)
+	go func() { errors <- s.PS2.Close(ctx) }()
+	go func() { errors <- s.Transfers.Close(ctx) }()
+	go func() { errors <- s.PS5.Close(ctx) }()
+	var first error
+	for range 3 {
+		if err := <-errors; err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
 
-func copyGames(value []domain.Game) []domain.Game { return append([]domain.Game(nil), value...) }
+func copyGames(value []domain.Game) []domain.Game {
+	if value == nil {
+		return nil
+	}
+	result := make([]domain.Game, len(value))
+	copy(result, value)
+	return result
+}
 
 func validateConsoleIP(value string) (string, error) {
 	value = strings.TrimSpace(value)

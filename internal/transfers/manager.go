@@ -42,14 +42,25 @@ type Manager struct {
 	rootStop    context.CancelFunc
 	done        chan struct{}
 	sequence    atomic.Uint64
+	platform    domain.Platform
+	eventPrefix string
 }
 
 func New(uploader Uploader, publisher Publisher, remoteRoot string) *Manager {
+	return newManager(uploader, publisher, remoteRoot, "", "")
+}
+
+func NewPlatform(uploader Uploader, publisher Publisher, remoteRoot string, platform domain.Platform) *Manager {
+	return newManager(uploader, publisher, remoteRoot, platform, string(platform))
+}
+
+func newManager(uploader Uploader, publisher Publisher, remoteRoot string, platform domain.Platform, eventPrefix string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		uploader: uploader, events: publisher, remoteRoot: remoteRoot,
 		items: make(map[string]*domain.Transfer), stopOnError: make(map[string]bool),
 		rootCtx: ctx, rootStop: cancel, done: make(chan struct{}),
+		platform: platform, eventPrefix: eventPrefix,
 	}
 	m.cond = sync.NewCond(&m.mu)
 	go m.run()
@@ -72,7 +83,7 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 	for _, game := range games {
 		item := &domain.Transfer{
 			ID: m.id("transfer"), QueueID: queueID, ConsoleIP: consoleIP,
-			Game: game, State: domain.QueueWaiting, TotalBytes: game.Size, CreatedAt: now,
+			Game: game, Platform: m.platform, State: domain.QueueWaiting, TotalBytes: game.Size, CreatedAt: now,
 		}
 		m.items[item.ID] = item
 		m.order = append(m.order, item.ID)
@@ -80,7 +91,7 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 		created = append(created, *item)
 	}
 	m.cond.Broadcast()
-	m.events.Publish("queue.created", map[string]any{"queue_id": queueID, "items": created})
+	m.publish("queue.created", map[string]any{"queue_id": queueID, "platform": m.platform, "items": created})
 	return created, nil
 }
 
@@ -118,7 +129,7 @@ func (m *Manager) Cancel(id string) error {
 		item.State = domain.QueueCancelled
 		now := time.Now()
 		item.FinishedAt = &now
-		m.events.Publish("queue.item_cancelled", *item)
+		m.publish("queue.item_cancelled", *item)
 	case domain.QueueStarting, domain.QueueTransferring, domain.QueueVerifying:
 		if m.activeID == id && m.activeStop != nil {
 			m.activeStop()
@@ -146,7 +157,7 @@ func (m *Manager) Retry(id string) error {
 	item.FinishedAt = nil
 	m.pending = append(m.pending, id)
 	m.cond.Broadcast()
-	m.events.Publish("queue.item_retried", *item)
+	m.publish("queue.item_retried", *item)
 	return nil
 }
 
@@ -154,7 +165,7 @@ func (m *Manager) Pause() {
 	m.mu.Lock()
 	m.paused = true
 	m.mu.Unlock()
-	m.events.Publish("queue.paused", nil)
+	m.publish("queue.paused", nil)
 }
 
 func (m *Manager) Resume() {
@@ -162,7 +173,7 @@ func (m *Manager) Resume() {
 	m.paused = false
 	m.cond.Broadcast()
 	m.mu.Unlock()
-	m.events.Publish("queue.resumed", nil)
+	m.publish("queue.resumed", nil)
 }
 
 func (m *Manager) ClearCompleted() int {
@@ -228,8 +239,8 @@ func (m *Manager) run() {
 		item.StartedAt = &now
 		m.mu.Unlock()
 
-		m.events.Publish("queue.started", map[string]string{"queue_id": item.QueueID})
-		m.events.Publish("queue.item_started", m.snapshot(id))
+		m.publish("queue.started", map[string]any{"queue_id": item.QueueID, "platform": m.platform})
+		m.publish("queue.item_started", m.snapshot(id))
 		m.process(ctx, item)
 		cancel()
 
@@ -242,7 +253,7 @@ func (m *Manager) run() {
 		queueFinished := m.queueFinishedLocked(item.QueueID)
 		m.mu.Unlock()
 		if queueFinished {
-			m.events.Publish("queue.completed", map[string]string{"queue_id": item.QueueID})
+			m.publish("queue.completed", map[string]any{"queue_id": item.QueueID, "platform": m.platform})
 		}
 	}
 }
@@ -278,7 +289,7 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 		m.mu.Unlock()
 		if time.Since(lastProgressEvent) >= 250*time.Millisecond || snapshot.BytesTransferred == snapshot.TotalBytes {
 			lastProgressEvent = time.Now()
-			m.events.Publish("queue.progress", snapshot)
+			m.publish("queue.progress", snapshot)
 		}
 	})
 	if err != nil {
@@ -296,9 +307,9 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 		snapshot := *value
 		m.mu.Unlock()
 		if snapshot.State == domain.QueueCancelled {
-			m.events.Publish("queue.item_cancelled", snapshot)
+			m.publish("queue.item_cancelled", snapshot)
 		} else {
-			m.events.Publish("queue.item_failed", snapshot)
+			m.publish("queue.item_failed", snapshot)
 		}
 		return
 	}
@@ -313,7 +324,7 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 		value.State = domain.QueueCompleted
 		value.FinishedAt = &now
 	})
-	m.events.Publish("queue.item_completed", m.snapshot(item.ID))
+	m.publish("queue.item_completed", m.snapshot(item.ID))
 }
 
 func (m *Manager) update(id string, fn func(*domain.Transfer)) {
@@ -355,4 +366,14 @@ func (m *Manager) cancelWaitingQueueLocked(queueID string) {
 
 func (m *Manager) id(prefix string) string {
 	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), m.sequence.Add(1))
+}
+
+func (m *Manager) publish(eventType string, payload any) {
+	if m.events == nil {
+		return
+	}
+	if m.eventPrefix != "" {
+		eventType = m.eventPrefix + "." + eventType
+	}
+	m.events.Publish(eventType, payload)
 }

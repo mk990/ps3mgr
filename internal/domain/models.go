@@ -17,6 +17,7 @@ const (
 type Game struct {
 	ID         string    `json:"id"`
 	Title      string    `json:"title"`
+	Format     string    `json:"format,omitempty"`
 	Version    string    `json:"version,omitempty"`
 	Region     string    `json:"region,omitempty"`
 	LocalPath  string    `json:"-"`
@@ -31,6 +32,8 @@ type Game struct {
 type Console struct {
 	ID        string    `json:"id"`
 	IP        string    `json:"ip"`
+	Platform  Platform  `json:"platform,omitempty"`
+	FTPPort   int       `json:"ftp_port,omitempty"`
 	FTPOnline bool      `json:"ftp_online"`
 	Detected  bool      `json:"detected"`
 	GameCount int       `json:"game_count"`
@@ -52,6 +55,7 @@ const (
 type Transfer struct {
 	ID               string     `json:"id"`
 	QueueID          string     `json:"queue_id"`
+	Platform         Platform   `json:"platform,omitempty"`
 	ConsoleIP        string     `json:"console_ip"`
 	Game             Game       `json:"game"`
 	State            QueueState `json:"state"`

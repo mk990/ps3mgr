@@ -1,6 +1,6 @@
-# PS3 Game Manager
+# PlayStation Manager
 
-PS3 Game Manager (`ps3mgr`) is a low-configuration Go application for browsing a local PS3 game library, discovering a PS3 on a private network, comparing installed games, and uploading missing games through a sequential transfer queue.
+PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage, PS3 games through FTP, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
 
 It replaces the external `bash`, `nmap`, `timeout`, and `lftp` dependencies used by `ps3-games.sh`. The executable contains its FTP client, network scanner, HTTP API, SSE event stream, and web interface.
 
@@ -12,10 +12,19 @@ Go 1.23 or newer is required.
 go build -o ps3mgr ./cmd/ps3mgr
 
 export PS3MGR_GAME_DIR=/data/games
+export PS3MGR_PS2_GAME_DIR=/data/ps2
+export PS3MGR_PS2_SYSTEM_DIR=/data/ps2/system
+export PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb
+export PS3MGR_PS2_COVER_DOWNLOAD=true
+export PS3MGR_PS5_GAME_DIR=/data/ps5
+export PS3MGR_PS5_REMOTE_GAME_DIR=/data/etaHEN/games
+export PS3MGR_PS5_FTP_PORT=2121
 ./ps3mgr serve
 ```
 
 Open `http://127.0.0.1:8080`. The server binds to localhost by default so it is not accidentally exposed to the LAN.
+
+Platform pages have stable, refresh-safe paths: `/ps2-games`, `/ps2-usb`, `/ps2-queue`, `/ps3-games`, `/ps3-consoles`, `/ps3-scan`, `/ps3-queue`, `/ps5-games`, `/ps5-consoles`, `/ps5-scan`, and `/ps5-queue` (with `/dashboard` for the overview).
 
 ## Docker
 
@@ -29,8 +38,19 @@ docker build \
 docker run --rm \
   -p 8080:8080 \
   -v /data/games:/games:ro \
+	-v /data/ps2:/data/ps2 \
+	-v /data/ps5:/data/ps5:ro \
+	-v /media/ps2-usb:/mnt/usb \
   ps3mgr:dev
 ```
+
+The USB bind mount supports both common layouts. A USB can be bound directly (`-v /media/usb0:/mnt/usb`) and appears as `usb-root`, or a parent can contain several targets (`/mnt/usb/usb0`, `/mnt/usb/usb1`). Standard OPL folders such as `DVD`, `ART`, and `CFG` are never mistaken for devices. The application does not mount devices, access `/dev/sdX`, or require privileged mode. It only writes to discovered targets inside `PS3MGR_PS2_USB_MOUNT_ROOT`; ensure the container user can read and write those host mounts. The PS2 library or at least its `covers` subdirectory must be writable for cover caching. To keep ISOs read-only, bind `/data/ps2` read-only and add a second writable bind at `/data/ps2/covers`.
+
+The `/ps2-usb` page reports the mounted filesystem and FAT32 compatibility as `COMPATIBLE`, `INCOMPATIBLE`, or `UNKNOWN`. Linux detects FAT-family, exFAT, ext, XFS, Btrfs, tmpfs, and FUSE-backed mounts through filesystem metadata. A Docker bind mount cannot expose the MBR partition table and FAT metadata does not reliably distinguish FAT16 from FAT32, so verify ambiguous targets on the host. Formatting and partitioning remain host responsibilities.
+
+`Initialize OPL Layout` is Docker-safe: it accepts a discovered USB target ID, creates the OPL directories, and copies `PS3MGR_PS2_SYSTEM_DIR` into that mounted target. It never formats, partitions, mounts, or unmounts a device.
+
+If `/ps2-usb` shows no target, inspect `GET /api/ps2/usb/status`. It reports the exact configured root, discovery mode, and inaccessible/skipped paths. After changing a Docker bind mount, recreate the container—Docker cannot add a new host bind mount to an already-created container. A direct bind to `/mnt/usb` appears as `usb-root`; a parent layout exposes child IDs such as `usb0`.
 
 The container listens on `0.0.0.0:8080` and reads games from `/games`. All other environment variables work normally with `docker run -e`.
 
@@ -40,6 +60,10 @@ On Linux, host networking can make local PS3 discovery more predictable:
 docker run --rm \
   --network host \
   -v /data/games:/games:ro \
+	-v /data/ps2:/data/ps2:ro \
+	-v /data/ps2-covers:/data/ps2/covers \
+	-v /data/ps5:/data/ps5:ro \
+	-v /media/ps2-usb:/mnt/usb \
   ghcr.io/OWNER/ps3mgr:latest
 ```
 
@@ -89,10 +113,47 @@ Each immediate child directory of `PS3MGR_GAME_DIR` is treated as one game:
 
 When available, `PS3_GAME/PARAM.SFO` supplies the title, title ID, version, and inferred region, while `ICON0.PNG` supplies the cover. A malformed or incomplete game directory remains visible using its directory name and the built-in placeholder.
 
+### Offline PS2 covers
+
+PS2 covers are cached local files. When a scanned game has a known serial and no matching local cover, the server downloads its default cover from [xlenore/ps2-covers](https://github.com/xlenore/ps2-covers) and writes it beneath the `covers` directory at the root of `PS3MGR_PS2_GAME_DIR`:
+
+```text
+/data/ps2/
+├── Gran Turismo 4.iso
+├── God of War.iso
+└── covers/
+    ├── SCES-51719.jpg
+    ├── default/
+    │   └── SCUS-97399.jpg
+    └── 3d/
+        └── SCUS-97399.png
+```
+
+The downloaded cache uses `covers/<SERIAL>.jpg`. Existing files always take priority and cause no network request. The `default/<SERIAL>.jpg` and `3d/<SERIAL>.png` layouts remain compatible with manually copied repository files. JPG, JPEG, PNG, and WebP are supported, with case-insensitive extensions and serial separators. Existing same-name images beside an ISO have highest priority.
+
+Only current games with known serials are requested. Downloads are bounded, validated as JPEG/PNG, and committed atomically; failures leave the game visible with its built-in placeholder. Set `PS3MGR_PS2_COVER_DOWNLOAD=false` to prohibit new downloads and use cached/manual images only. Once cached, covers work without internet access. The browser never receives a remote image URL: the embedded UI serves CSS, JavaScript, covers, and API calls from the application origin under a same-origin content security policy.
+
 ## Commands
 
 ```text
 ps3mgr --help
+ps3mgr ps2 --help
+ps3mgr ps2 local-games [--dir /data/ps2] [--size] [--json]
+ps3mgr ps2 games [--dir /data/ps2] [--json]
+ps3mgr ps2 usb [--json]
+ps3mgr ps2 compare --usb usb0 [--json]
+ps3mgr ps2 install --usb usb0 "God of War" "Gran Turismo 4"
+ps3mgr ps2 install --usb usb0 --all
+ps3mgr ps2 queue [--json]
+ps3mgr ps5 --help
+ps3mgr ps5 local-games [--dir /data/ps5] [--json]
+ps3mgr ps5 scan 192.168.1.0/24 [--workers 32] [--json]
+ps3mgr ps5 add-console --ip 192.168.1.155 [--json]
+ps3mgr ps5 games --ip 192.168.1.155 [--json]
+ps3mgr ps5 compare --ip 192.168.1.155 [--dir /data/ps5] [--json]
+ps3mgr ps5 install --ip 192.168.1.155 "PPSA01325"
+ps3mgr ps5 install --ip 192.168.1.155 --all
+ps3mgr ps5 queue [--json]
 ps3mgr local-games [--dir /data/games] [--json]
 ps3mgr scan 192.168.1.0/24 [--workers 32] [--json]
 ps3mgr consoles [--json]
@@ -113,6 +174,16 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PS3MGR_GAME_DIR` | `.` | Local directory containing game folders |
+| `PS3MGR_PS3_GAME_DIR` | value of `PS3MGR_GAME_DIR` | Preferred generation-specific PS3 game directory override |
+| `PS3MGR_PS2_GAME_DIR` | `./ps2-games` | Recursive local PS2 ISO library |
+| `PS3MGR_PS2_SYSTEM_DIR` | `./ps2-system` | Required OPL/system files copied to a selected USB target |
+| `PS3MGR_PS2_USB_MOUNT_ROOT` | `/mnt/usb` | Parent containing discovered mounted USB directories |
+| `PS3MGR_PS2_COVER_DOWNLOAD` | `true` | Download only missing known-serial covers and cache them locally |
+| `PS3MGR_PS5_GAME_DIR` | `./ps5-games` | Recursive local PS5 ShadowMountPlus library |
+| `PS3MGR_PS5_REMOTE_GAME_DIR` | `/data/etaHEN/games` | PS5 FTP installation/library directory |
+| `PS3MGR_PS5_FTP_PORT` | `2121` | etaHEN FTP port used for PS5 scan and transfers |
+| `PS3MGR_PS5_FTP_USER` | `anonymous` | PS5 FTP username |
+| `PS3MGR_PS5_FTP_PASSWORD` | empty | PS5 FTP password |
 | `PS3MGR_REMOTE_GAME_DIR` | `/dev_hdd0/GAMES` | PS3 destination/library directory |
 | `PS3MGR_LISTEN` | `127.0.0.1:8080` | Web listen address |
 | `PS3_FTP_USER` | `anonymous` | FTP username |
@@ -122,6 +193,22 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_FTP_TIMEOUT` | `8s` | FTP operation and connection timeout |
 
 Durations use Go syntax such as `500ms`, `8s`, or `2m`.
+
+`serve` writes structured text logs suitable for Docker collection. Startup logs show configured library/USB paths, separate PS2, PS3, and PS5 game counts, discovered USB capacity, FTP ports, and stable section URLs. Runtime logs cover console discovery and each platform's queue lifecycle with `[PS2]`, `[PS3]`, or `[PS5]` messages. FTP credentials are never logged, and high-frequency progress stays on the event stream instead of flooding stdout.
+
+## PS2 / Open PS2 Loader behavior
+
+The PS2 scanner accepts `.iso` case-insensitively and reads `SYSTEM.CNF` directly from ISO9660 images to identify serials including `SLUS`, `SLES`, `SCUS`, `SCES`, `SLPM`, `SLPS`, and related legitimate prefixes. Filename detection is a fallback; an unidentified ISO remains visible as `unknown` but cannot be installed until it has a reliable game ID.
+
+For FAT32-compatible images, the installer writes OPL's `DVD/<SERIAL>.<title>.iso` layout. Images above the FAT32 single-file limit use the official USBExtreme layout: 1 GiB `ul.<crc>.<serial>.<part>` files plus fixed 64-byte records in the root `ul.cfg`. Existing unrelated `ul.cfg` records are preserved. Writes use `.partial` files, support cancellation, and are verified before completion.
+
+The configured PS2 system directory must exist and contain files before installation. The installer prepares standard OPL directories (`DVD`, `CD`, `ART`, `CFG`, `VMC`, `THM`, and `APPS`) and copies the configured system tree without invoking Bash, `cp`, `df`, `iso2opl`, or another shell utility.
+
+## PS5 / ShadowMountPlus behavior
+
+The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and the supported `.ffpfsc`, `.exfat`, `.ffpkg`, and `.ffpfs` image formats. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames.
+
+Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` markers before registering a host as a PS5. The web API accepts a console ID and local game IDs, never an arbitrary remote filesystem path. PS5 transfers are sequential within their own queue, but run concurrently with PS2 and PS3 jobs.
 
 ## PS3 and network requirements
 
@@ -133,9 +220,9 @@ Durations use Go syntax such as `500ms`, `8s`, or `2m`.
 
 The FTP client supports passive mode (EPSV with PASV fallback), binary transfers, directory creation, per-file retries, reconnection, `REST`-based resume where supported, and cancellation. A completed remote file is skipped during a resumed installation.
 
-## Transfer behavior
+## PS3 transfer behavior
 
-All callers use one application-level queue. Games transfer one at a time. A failed or cancelled game does not stop later games by default; use `--stop-on-error` in the CLI or the corresponding API field to cancel the remainder of that submitted queue.
+PS3 callers use the PS3 FTP queue and games transfer one at a time. PS2 uses a separate OPL/USB queue that can run concurrently. A failed or cancelled PS3 game does not stop later PS3 games by default; use `--stop-on-error` in the CLI or the corresponding API field to cancel the remainder of that submitted PS3 queue.
 
 The web panel provides:
 
@@ -156,6 +243,33 @@ The embedded web UI uses the same public application services as the CLI:
 
 ```text
 GET    /api/health
+GET    /api/ps2/games
+GET    /api/ps2/games/{id}/cover
+GET    /api/ps2/usb
+GET    /api/ps2/usb/status
+POST   /api/ps2/usb/{id}/prepare
+GET    /api/ps2/compare/{usb_id}
+POST   /api/ps2/queue
+GET    /api/ps2/queue
+GET    /api/ps2/queue/{id}
+POST   /api/ps2/queue/{id}/cancel
+POST   /api/ps2/queue/{id}/retry
+GET    /api/ps5/games
+GET    /api/ps5/games/{id}/icon
+POST   /api/ps5/scan
+GET    /api/ps5/consoles
+POST   /api/ps5/consoles
+GET    /api/ps5/consoles/{id}/games
+POST   /api/ps5/consoles/{id}/rescan
+GET    /api/ps5/compare/{id}
+POST   /api/ps5/queue
+GET    /api/ps5/queue
+GET    /api/ps5/queue/{id}
+POST   /api/ps5/queue/{id}/cancel
+POST   /api/ps5/queue/{id}/retry
+POST   /api/ps5/queue/pause
+POST   /api/ps5/queue/resume
+DELETE /api/ps5/queue/completed
 GET    /api/local-games
 GET    /api/local-games/{id}/icon
 POST   /api/scan

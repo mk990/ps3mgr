@@ -7,8 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"ps3mgr/internal/config"
 	"ps3mgr/internal/domain"
 	"ps3mgr/internal/games"
+	"ps3mgr/internal/ps2"
 	ps3web "ps3mgr/internal/web"
 )
 
@@ -73,6 +76,10 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 		commandErr = r.install(ctx, application, args[1:])
 	case "serve":
 		commandErr = r.serve(ctx, application, args[1:])
+	case "ps2":
+		commandErr = r.ps2(ctx, application, args[1:])
+	case "ps5":
+		commandErr = r.ps5(ctx, application, args[1:])
 	default:
 		fmt.Fprintf(r.Err, "unknown command %q\n\n", args[0])
 		r.help()
@@ -89,12 +96,14 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 }
 
 func (r Runner) help() {
-	fmt.Fprint(r.Out, `PS3 Game Manager — a lightweight PS3 library and transfer manager
+	fmt.Fprint(r.Out, `PlayStation Manager — PS2 OPL/USB and PS3 FTP workflows
 
 Usage:
   ps3mgr <command> [options]
 
 Commands:
+  ps2 <command>         Manage PS2 ISOs and OPL USB targets
+  ps5 <command>         Manage PS5 ShadowMountPlus games over FTP port 2121
   local-games           Scan and display the local game library
   scan <CIDR>           Discover PS3 consoles on a private local network
   consoles              List consoles found in the current process
@@ -108,6 +117,260 @@ Commands:
 
 Use "ps3mgr <command> --help" for command-specific options.
 `)
+}
+
+func (r Runner) ps2(ctx context.Context, application *app.Service, args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		fmt.Fprint(r.Out, `PlayStation 2 / Open PS2 Loader
+
+Usage:
+  ps3mgr ps2 local-games [--dir PATH] [--size] [--json]
+  ps3mgr ps2 games       [--dir PATH] [--json]
+  ps3mgr ps2 usb         [--json]
+  ps3mgr ps2 compare     --usb USB_ID [--json]
+  ps3mgr ps2 install     --usb USB_ID [--all] <GAME...>
+  ps3mgr ps2 queue       [--json]
+`)
+		return nil
+	}
+	switch args[0] {
+	case "local-games", "games":
+		return r.ps2LocalGames(ctx, application, args[1:])
+	case "usb":
+		return r.ps2USB(application, args[1:])
+	case "compare":
+		return r.ps2Compare(ctx, application, args[1:])
+	case "install":
+		return r.ps2Install(ctx, application, args[1:])
+	case "queue":
+		return r.ps2Queue(application, args[1:])
+	default:
+		return fmt.Errorf("unknown PS2 command %q", args[0])
+	}
+}
+
+func (r Runner) ps2LocalGames(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps2 local-games", r.Err)
+	directory := set.String("dir", "", "PS2 ISO directory (overrides PS3MGR_PS2_GAME_DIR)")
+	sizeOnly := set.Bool("size", false, "print ISO size report")
+	jsonOutput := set.Bool("json", false, "print JSON")
+	_ = set.Bool("verbose", false, "verbose output")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	items, err := application.PS2.LocalGames(ctx, *directory)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return r.printValue(items, true)
+	}
+	var total int64
+	if *sizeOnly {
+		fmt.Fprintln(r.Out, "PS2 ISO Size Report")
+		fmt.Fprintln(r.Out)
+		fmt.Fprintf(r.Out, "%-40s %12s\n", "Game", "Size")
+		fmt.Fprintln(r.Out, strings.Repeat("-", 53))
+	}
+	for _, game := range items {
+		total += game.Size
+		if *sizeOnly {
+			fmt.Fprintf(r.Out, "%-40s %12s\n", game.Title, humanBytes(game.Size))
+		} else {
+			fmt.Fprintf(r.Out, "%-12s %10s  %s\n", strings.ToUpper(game.ID), humanBytes(game.Size), game.Title)
+		}
+	}
+	if *sizeOnly {
+		fmt.Fprintf(r.Out, "\nTotal: %s\n", humanBytes(total))
+	} else {
+		fmt.Fprintf(r.Out, "\n%d PS2 games\n", len(items))
+	}
+	return nil
+}
+
+func (r Runner) ps2USB(application *app.Service, args []string) error {
+	set := newFlagSet("ps2 usb", r.Err)
+	jsonOutput := set.Bool("json", false, "print JSON")
+	_ = set.Bool("verbose", false, "verbose output")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	items, err := application.PS2.USBTargets()
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return r.printValue(items, true)
+	}
+	for _, target := range items {
+		status := "available"
+		if target.ReadOnly {
+			status = "read-only"
+		}
+		fmt.Fprintf(r.Out, "%-12s %-24s %10s free  %-10s  FAT32: %s\n", target.ID, target.MountPath, humanBytes(target.FreeBytes), fallback(target.Filesystem, "unknown"), target.FAT32Status+" ("+status+")")
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(r.Out, "No PS2 USB devices detected.")
+	}
+	return nil
+}
+
+func (r Runner) ps2Compare(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps2 compare", r.Err)
+	usb := set.String("usb", "", "USB target ID (required)")
+	directory := set.String("dir", "", "PS2 ISO directory")
+	jsonOutput := set.Bool("json", false, "print JSON")
+	_ = set.Bool("verbose", false, "verbose output")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *usb == "" {
+		return fmt.Errorf("--usb is required")
+	}
+	if _, err := application.PS2.LocalGames(ctx, *directory); err != nil {
+		return err
+	}
+	if _, err := application.PS2.USBTargets(); err != nil {
+		return err
+	}
+	items, err := application.PS2.Compare(*usb)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return r.printValue(items, true)
+	}
+	for _, item := range items {
+		status := "MISSING"
+		if item.Installed {
+			status = "INSTALLED"
+		}
+		fmt.Fprintf(r.Out, "%-10s %-12s %s\n", status, item.Game.ID, item.Game.Title)
+	}
+	return nil
+}
+
+func (r Runner) ps2Install(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps2 install", r.Err)
+	usb := set.String("usb", "", "USB target ID (required)")
+	directory := set.String("dir", "", "PS2 ISO directory")
+	all := set.Bool("all", false, "install all games missing from the USB")
+	jsonOutput := set.Bool("json", false, "print JSON")
+	_ = set.Bool("verbose", false, "verbose output")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *usb == "" {
+		return fmt.Errorf("--usb is required")
+	}
+	gamesList, err := application.PS2.LocalGames(ctx, *directory)
+	if err != nil {
+		return err
+	}
+	if _, err = application.PS2.USBTargets(); err != nil {
+		return err
+	}
+	var selected []ps2.Game
+	if *all {
+		compared, err := application.PS2.Compare(*usb)
+		if err != nil {
+			return err
+		}
+		for _, item := range compared {
+			if !item.Installed {
+				selected = append(selected, item.Game)
+			}
+		}
+	} else {
+		for _, wanted := range set.Args() {
+			found := false
+			for _, game := range gamesList {
+				if strings.EqualFold(wanted, game.Title) || strings.EqualFold(wanted, game.ID) || strings.EqualFold(wanted, game.ISOFilename) || wanted == game.PublicID {
+					selected = append(selected, game)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("PS2 game %q not found", wanted)
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return fmt.Errorf("no PS2 games selected")
+	}
+	ids := make([]string, len(selected))
+	for i := range selected {
+		ids[i] = selected[i].PublicID
+	}
+	jobs, err := application.PS2.Enqueue(*usb, ids)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		if err := r.printValue(jobs, true); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(r.Out, "Queued %d PS2 game(s) for %s. OPL operations run one at a time.\n", len(jobs), *usb)
+	}
+	wanted := make(map[string]bool)
+	for _, job := range jobs {
+		wanted[job.ID] = true
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			for id := range wanted {
+				_ = application.PS2.Queue.Cancel(id)
+			}
+			return ctx.Err()
+		case <-ticker.C:
+			terminal := true
+			failed := false
+			for _, job := range application.PS2.Queue.List() {
+				if !wanted[job.ID] {
+					continue
+				}
+				if job.State == ps2.StateFailed {
+					failed = true
+				}
+				if job.State != ps2.StateCompleted && job.State != ps2.StateFailed && job.State != ps2.StateCancelled {
+					terminal = false
+				}
+			}
+			if terminal {
+				if failed {
+					return fmt.Errorf("one or more PS2 installations failed")
+				}
+				if !*jsonOutput {
+					fmt.Fprintln(r.Out, "PS2 queue completed.")
+				}
+				return nil
+			}
+		}
+	}
+}
+
+func (r Runner) ps2Queue(application *app.Service, args []string) error {
+	set := newFlagSet("ps2 queue", r.Err)
+	jsonOutput := set.Bool("json", false, "print JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	items := application.PS2.Queue.List()
+	if *jsonOutput {
+		return r.printValue(items, true)
+	}
+	for _, job := range items {
+		fmt.Fprintf(r.Out, "%-14s %-12s %s -> %s\n", job.State, job.Game.ID, job.Game.Title, job.USBID)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(r.Out, "PS2 queue is empty.")
+	}
+	return nil
 }
 
 func (r Runner) localGames(ctx context.Context, application *app.Service, args []string) error {
@@ -374,16 +637,72 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	set := newFlagSet("serve", r.Err)
 	listen := set.String("listen", application.Config.Listen, "listen address")
 	directory := set.String("dir", "", "local game directory")
+	ps2Directory := set.String("ps2-dir", "", "local PS2 ISO directory")
+	ps5Directory := set.String("ps5-dir", "", "local PS5 ShadowMountPlus game directory")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if *directory != "" {
 		application.Config.GameDir = *directory
 	}
+	if *ps2Directory != "" {
+		application.PS2.GameDir = *ps2Directory
+	}
+	if *ps5Directory != "" {
+		application.PS5.GameDir = *ps5Directory
+	}
+	logger := slog.New(slog.NewTextHandler(r.Out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("[APP] starting PlayStation Manager", "listen", *listen, "ps2_game_dir", application.PS2.GameDir, "ps2_system_dir", application.PS2.SystemDir, "ps2_usb_root", application.Config.PS2USBRoot, "ps2_cover_download", application.Config.PS2CoverDownload, "ps2_cover_cache", filepath.Join(application.PS2.GameDir, "covers"), "ps3_game_dir", application.Config.GameDir, "ps3_remote_dir", application.Config.RemoteGameDir, "ps5_game_dir", application.PS5.GameDir, "ps5_remote_dir", application.PS5.RemoteDir, "ps5_ftp_port", application.PS5.FTP.Port)
 	items, err := application.LocalGames(ctx, "")
 	if err != nil {
+		logger.Error("[PS3] local library scan failed", "error", err)
 		return err
 	}
+	logger.Info("[PS3] local library loaded", "games", len(items), "directory", application.Config.GameDir)
+	ps2Count := 0
+	if _, statErr := os.Stat(application.PS2.GameDir); statErr == nil {
+		ps2Items, scanErr := application.PS2.LocalGames(ctx, "")
+		if scanErr != nil {
+			logger.Error("[PS2] local library scan failed", "error", scanErr)
+			return scanErr
+		}
+		ps2Count = len(ps2Items)
+		logger.Info("[PS2] local library loaded", "games", ps2Count, "directory", application.PS2.GameDir)
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS2] local library is unavailable", "directory", application.PS2.GameDir, "hint", "set PS3MGR_PS2_GAME_DIR or use --ps2-dir")
+	} else {
+		logger.Error("[PS2] cannot access local library", "directory", application.PS2.GameDir, "error", statErr)
+		return statErr
+	}
+	ps5Count := 0
+	if _, statErr := os.Stat(application.PS5.GameDir); statErr == nil {
+		ps5Items, scanErr := application.PS5.LocalGames(ctx, "")
+		if scanErr != nil {
+			logger.Error("[PS5] local library scan failed", "error", scanErr)
+			return scanErr
+		}
+		ps5Count = len(ps5Items)
+		logger.Info("[PS5] local library loaded", "games", ps5Count, "directory", application.PS5.GameDir, "formats", "folder,ffpfsc,exfat,ffpkg,ffpfs")
+	} else if os.IsNotExist(statErr) {
+		logger.Warn("[PS5] local library is unavailable", "directory", application.PS5.GameDir, "hint", "set PS3MGR_PS5_GAME_DIR or use --ps5-dir")
+	} else {
+		logger.Error("[PS5] cannot access local library", "directory", application.PS5.GameDir, "error", statErr)
+		return statErr
+	}
+	discovery, usbErr := application.PS2.USBDiscovery()
+	if usbErr != nil {
+		logger.Warn("[PS2] USB discovery failed", "root", application.Config.PS2USBRoot, "error", usbErr)
+	} else {
+		logger.Info("[PS2] USB discovery completed", "targets", len(discovery.Targets), "root", discovery.Root, "mode", discovery.Mode, "issues", len(discovery.Issues))
+		for _, issue := range discovery.Issues {
+			logger.Warn("[PS2] USB discovery issue", "path", issue.Path, "reason", issue.Reason)
+		}
+		for _, target := range discovery.Targets {
+			logger.Info("[PS2] USB target available", "usb_id", target.ID, "mount", target.MountPath, "filesystem", target.Filesystem, "fat32_status", target.FAT32Status, "free_bytes", target.FreeBytes, "read_only", target.ReadOnly, "opl_ready", target.OPLReady)
+		}
+	}
+	stopEventLogs := logServeEvents(ctx, logger, application)
+	defer stopEventLogs()
 	handler := ps3web.New(application).Handler()
 	server := &http.Server{
 		Addr: *listen, Handler: handler,
@@ -391,17 +710,111 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	fmt.Fprintf(r.Out, "PS3 Game Manager loaded %d games.\nWeb panel: http://%s\n", len(items), displayAddress(*listen))
+	logger.Info("[APP] web server ready", "url", "http://"+displayAddress(*listen), "ps2_games", ps2Count, "ps3_games", len(items), "ps5_games", ps5Count, "ps2_games_url", "http://"+displayAddress(*listen)+"/ps2-games", "ps3_games_url", "http://"+displayAddress(*listen)+"/ps3-games", "ps5_games_url", "http://"+displayAddress(*listen)+"/ps5-games")
 	select {
 	case <-ctx.Done():
+		logger.Info("[APP] shutdown requested")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return server.Shutdown(shutdownCtx)
+		err := server.Shutdown(shutdownCtx)
+		if err != nil {
+			logger.Error("[APP] web server shutdown failed", "error", err)
+		} else {
+			logger.Info("[APP] web server stopped")
+		}
+		return err
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
+	}
+}
+
+func logServeEvents(ctx context.Context, logger *slog.Logger, application *app.Service) func() {
+	stream, unsubscribe := application.Events.Subscribe(256)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-stream:
+				if !ok {
+					return
+				}
+				switch event.Type {
+				case "ps2.covers.cached":
+					logger.Info("[PS2] covers cached", "event", event.Payload)
+				case "ps2.covers.failed":
+					logger.Warn("[PS2] one or more covers could not be cached", "event", event.Payload)
+				case "ps2.usb.connected", "ps2.usb.disconnected", "ps2.usb.prepared", "ps2.usb.skipped":
+					logger.Info("[PS2] "+event.Type, "event", event.Payload)
+				case "ps2.job.started":
+					if job, ok := event.Payload.(ps2.Job); ok {
+						logger.Info("[PS2] job started", "job_id", job.ID, "game", job.Game.Title, "game_id", job.Game.ID, "usb_id", job.USBID, "attempt", job.Attempts)
+					}
+				case "ps2.job.completed":
+					if job, ok := event.Payload.(ps2.Job); ok {
+						logger.Info("[PS2] job completed", "job_id", job.ID, "game", job.Game.Title, "usb_id", job.USBID, "bytes", job.Game.Size)
+					}
+				case "ps2.job.failed", "ps2.job.paused":
+					if job, ok := event.Payload.(ps2.Job); ok {
+						logger.Error("[PS2] "+event.Type, "job_id", job.ID, "game", job.Game.Title, "usb_id", job.USBID, "recoverable", job.Recoverable, "error", job.Error)
+					}
+				case "ps2.queue.completed":
+					logger.Info("[PS2] queue completed", "summary", event.Payload)
+				case "ps5.scan.started", "ps5.scan.completed":
+					logger.Info("[PS5] "+event.Type, "event", event.Payload)
+				case "ps5.console.connected", "ps5.scan.host_found":
+					if console, ok := event.Payload.(domain.Console); ok {
+						logger.Info("[PS5] console detected", "ip", console.IP, "ftp_port", console.FTPPort, "games", console.GameCount)
+					}
+				case "ps5.queue.item_started":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Info("[PS5] transfer started", "transfer_id", transfer.ID, "game", transfer.Game.Title, "format", transfer.Game.Format, "console_ip", transfer.ConsoleIP, "ftp_port", application.PS5.FTP.Port, "destination", application.PS5.RemoteDir, "attempt", transfer.Attempts)
+					}
+				case "ps5.queue.item_completed":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Info("[PS5] transfer completed", "transfer_id", transfer.ID, "game", transfer.Game.Title, "console_ip", transfer.ConsoleIP, "bytes", transfer.TotalBytes, "destination", application.PS5.RemoteDir)
+					}
+				case "ps5.queue.item_failed":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Error("[PS5] transfer failed", "transfer_id", transfer.ID, "game", transfer.Game.Title, "console_ip", transfer.ConsoleIP, "error", transfer.Error)
+					}
+				case "ps5.queue.completed":
+					logger.Info("[PS5] queue completed", "summary", event.Payload)
+				case "scan.started", "scan.completed":
+					logger.Info("[PS3] "+event.Type, "event", event.Payload)
+				case "console.connected":
+					if console, ok := event.Payload.(domain.Console); ok {
+						logger.Info("[PS3] console connected", "ip", console.IP, "games", console.GameCount)
+					}
+				case "queue.item_started":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Info("[PS3] transfer started", "transfer_id", transfer.ID, "game", transfer.Game.Title, "console_ip", transfer.ConsoleIP, "attempt", transfer.Attempts)
+					}
+				case "queue.item_completed":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Info("[PS3] transfer completed", "transfer_id", transfer.ID, "game", transfer.Game.Title, "console_ip", transfer.ConsoleIP, "bytes", transfer.TotalBytes)
+					}
+				case "queue.item_failed":
+					if transfer, ok := event.Payload.(domain.Transfer); ok {
+						logger.Error("[PS3] transfer failed", "transfer_id", transfer.ID, "game", transfer.Game.Title, "console_ip", transfer.ConsoleIP, "error", transfer.Error)
+					}
+				case "queue.completed":
+					logger.Info("[PS3] queue completed", "summary", event.Payload)
+				}
+			}
+		}
+	}()
+	return func() {
+		unsubscribe()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
 	}
 }
 

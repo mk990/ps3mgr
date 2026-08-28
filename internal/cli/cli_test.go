@@ -52,3 +52,22 @@ func TestAddConsoleRejectsPublicAddress(t *testing.T) {
 		t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errors.String())
 	}
 }
+
+func TestPS2HelpAndLocalSizeOverride(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "SCES_517.19.Game.ISO"), []byte("fixture"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PS3MGR_PS2_GAME_DIR", filepath.Join(root, "missing"))
+	t.Setenv("PS3MGR_PS2_COVER_DOWNLOAD", "false")
+	var output, errors bytes.Buffer
+	runner := Runner{Out: &output, Err: &errors}
+	if code := runner.Run(context.Background(), []string{"ps2", "--help"}); code != 0 || !strings.Contains(output.String(), "ps2 install") {
+		t.Fatalf("help code=%d output=%q", code, output.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if code := runner.Run(context.Background(), []string{"ps2", "local-games", "--dir", root, "--size"}); code != 0 || !strings.Contains(output.String(), "PS2 ISO Size Report") {
+		t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errors.String())
+	}
+}

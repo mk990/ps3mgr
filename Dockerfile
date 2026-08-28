@@ -27,19 +27,26 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG SOURCE=https://github.com/unknown/ps3mgr
 
-LABEL org.opencontainers.image.title="PS3 Game Manager" \
-      org.opencontainers.image.description="A lightweight PS3 game library and FTP transfer manager" \
+LABEL org.opencontainers.image.title="PlayStation Manager" \
+	  org.opencontainers.image.description="PS2 OPL/USB, PS3 FTP, and PS5 ShadowMountPlus manager with independent queues" \
       org.opencontainers.image.source=$SOURCE \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$COMMIT
 
 ENV PS3MGR_GAME_DIR=/games \
-    PS3MGR_LISTEN=0.0.0.0:8080
+	PS3MGR_PS2_GAME_DIR=/data/ps2 \
+	PS3MGR_PS2_SYSTEM_DIR=/data/ps2/system \
+	PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb \
+	PS3MGR_PS2_COVER_DOWNLOAD=true \
+	PS3MGR_PS5_GAME_DIR=/data/ps5 \
+	PS3MGR_PS5_REMOTE_GAME_DIR=/data/etaHEN/games \
+	PS3MGR_PS5_FTP_PORT=2121 \
+	PS3MGR_LISTEN=0.0.0.0:8080
 
 COPY --from=build /out/ps3mgr /usr/local/bin/ps3mgr
 
 EXPOSE 8080
-VOLUME ["/games"]
+VOLUME ["/games", "/data/ps2", "/data/ps5", "/mnt/usb"]
 
 ENTRYPOINT ["/usr/local/bin/ps3mgr"]
 CMD ["serve"]

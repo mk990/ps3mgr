@@ -107,6 +107,49 @@ func TestManagerStopOnErrorCancelsRemaining(t *testing.T) {
 	waitState(t, manager, created[1].ID, domain.QueueCancelled)
 }
 
+func TestPS5AndPS3QueuesCannotBlockEachOther(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		blockedPlatform domain.Platform
+	}{
+		{name: "slow PS5 does not block PS3", blockedPlatform: domain.PlatformPS5},
+		{name: "slow PS3 does not block PS5", blockedPlatform: domain.PlatformPS3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ps3Uploader := &fakeUploader{fail: map[string]int{}, wait: map[string]bool{}}
+			ps5Uploader := &fakeUploader{fail: map[string]int{}, wait: map[string]bool{}}
+			if test.blockedPlatform == domain.PlatformPS3 {
+				ps3Uploader.wait["blocked"] = true
+			} else {
+				ps5Uploader.wait["blocked"] = true
+			}
+			ps3Queue := New(ps3Uploader, discardPublisher{}, "/dev_hdd0/GAMES")
+			ps5Queue := NewPlatform(ps5Uploader, discardPublisher{}, "/data/etaHEN/games", domain.PlatformPS5)
+			defer closeManager(t, ps3Queue)
+			defer closeManager(t, ps5Queue)
+
+			blockedQueue, freeQueue := ps5Queue, ps3Queue
+			if test.blockedPlatform == domain.PlatformPS3 {
+				blockedQueue, freeQueue = ps3Queue, ps5Queue
+			}
+			blocked, err := blockedQueue.Enqueue([]domain.Game{{Title: "blocked", Size: 1}}, "127.0.0.1", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, blockedQueue, blocked[0].ID, domain.QueueTransferring)
+			free, err := freeQueue.Enqueue([]domain.Game{{Title: "free", Size: 1}}, "127.0.0.1", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, freeQueue, free[0].ID, domain.QueueCompleted)
+			if err := blockedQueue.Cancel(blocked[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, blockedQueue, blocked[0].ID, domain.QueueCancelled)
+		})
+	}
+}
+
 func waitState(t *testing.T, manager *Manager, id string, wanted domain.QueueState) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

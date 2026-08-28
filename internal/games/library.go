@@ -92,7 +92,8 @@ func Compare(local, remote []domain.Game) []domain.Game {
 		}
 		byTitle[NormalizeTitle(game.Title)] = true
 	}
-	result := append([]domain.Game(nil), local...)
+	result := make([]domain.Game, len(local))
+	copy(result, local)
 	for i := range result {
 		installed := result[i].ID != "" && byID[strings.ToUpper(result[i].ID)]
 		if !installed {
