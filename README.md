@@ -206,7 +206,7 @@ The configured PS2 system directory must exist and contain files before installa
 
 ## PS5 / ShadowMountPlus behavior
 
-The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and the supported `.ffpfsc`, `.exfat`, `.ffpkg`, and `.ffpfs` image formats. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames.
+The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and every documented image source: `.ffpkg`, `.exfat`, `.ffpfs`, and `.ffpfsc`. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames. As upstream requires, `backports/` is excluded from normal game discovery; `.ffpfs` and `.ffpfsc` remain marked as upstream experimental formats but can be copied normally.
 
 Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` markers before registering a host as a PS5. The web API accepts a console ID and local game IDs, never an arbitrary remote filesystem path. PS5 transfers are sequential within their own queue, but run concurrently with PS2 and PS3 jobs.
 

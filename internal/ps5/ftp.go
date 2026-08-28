@@ -79,8 +79,21 @@ func (f *FTP) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error)
 			format = "folder"
 		}
 		id := titleID(name)
+		title := titleFromFilename(name, id)
+		if format == "folder" {
+			if data, readErr := client.ReadFile(ctx, path.Join(f.RemoteRoot, name, "sce_sys/param.json"), 1<<20); readErr == nil {
+				if metadata, parseErr := parseParam(data); parseErr == nil {
+					if metadata.ID != "" {
+						id = metadata.ID
+					}
+					if metadata.Title != "" {
+						title = metadata.Title
+					}
+				}
+			}
+		}
 		result = append(result, domain.Game{
-			ID: id, Title: titleFromFilename(name, id), Format: format,
+			ID: id, Title: title, Format: format,
 			RemotePath: path.Join(f.RemoteRoot, name), Installed: true, State: domain.StateInstalled,
 		})
 	}

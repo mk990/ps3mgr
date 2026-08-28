@@ -105,7 +105,7 @@ func folderGame(ctx context.Context, directory, paramPath string) (domain.Game, 
 	game := domain.Game{ID: id, Title: title, Format: "folder", LocalPath: directory, Size: size, State: domain.StateNotInstalled}
 	for _, name := range []string{"icon0.png", "icon0.PNG"} {
 		icon := filepath.Join(directory, "sce_sys", name)
-		if info, iconErr := os.Stat(icon); iconErr == nil && info.Mode().IsRegular() {
+		if info, iconErr := os.Lstat(icon); iconErr == nil && info.Mode().IsRegular() {
 			game.IconPath = icon
 			game.IconURL = "/api/ps5/games/" + games.PublicID(game) + "/icon"
 			break
@@ -124,11 +124,15 @@ func readParam(path string) (paramMetadata, error) {
 	if err != nil {
 		return paramMetadata{}, err
 	}
+	return parseParam(data)
+}
+
+func parseParam(data []byte) (paramMetadata, error) {
 	if len(data) > 1<<20 {
 		return paramMetadata{}, fmt.Errorf("param.json exceeds 1 MiB")
 	}
 	var value map[string]any
-	if err = json.Unmarshal(data, &value); err != nil {
+	if err := json.Unmarshal(data, &value); err != nil {
 		return paramMetadata{}, err
 	}
 	id := firstString(value, "titleId", "title_id")
