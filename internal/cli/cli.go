@@ -663,6 +663,7 @@ func (r Runner) serve(ctx context.Context, application *app.Service, args []stri
 	}
 	logger := slog.New(slog.NewTextHandler(r.Out, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("[APP] starting PlayStation Manager", "listen", *listen, "ps2_game_dir", application.PS2.GameDir, "ps2_system_dir", application.PS2.SystemDir, "ps2_usb_root", application.Config.PS2USBRoot, "ps2_cover_download", application.Config.PS2CoverDownload, "ps2_cover_cache", filepath.Join(application.PS2.GameDir, "covers"), "ps3_game_dir", application.Config.PS3GameDir, "ps3_remote_dir", application.Config.RemoteGameDir, "ps4_game_dir", application.PS4.GameDir, "ps4_rpi_port", application.PS4.RPI.Port, "ps4_pkg_listen", application.PS4.Content.Listen, "ps4_advertise_url", fallback(application.PS4.Content.AdvertiseURL, "not configured"), "ps5_game_dir", application.PS5.GameDir, "ps5_remote_dir", application.PS5.RemoteDir, "ps5_ftp_port", application.PS5.FTP.Port)
+	startPS4PackageServer(logger, application.PS4.Content)
 	stopEventLogs := logServeEvents(ctx, logger, application)
 	defer stopEventLogs()
 	handler := ps3web.New(application).Handler()
@@ -765,14 +766,6 @@ func initializeServe(ctx context.Context, logger *slog.Logger, application *app.
 	} else {
 		logger.Error("[PS4] cannot access local PKG library; panel remains available", "directory", application.PS4.GameDir, "error", statErr)
 	}
-	if application.PS4.Content.AdvertiseURL == "" {
-		logger.Warn("[PS4] package server is not configured; browsing remains available", "required_env", "PS3MGR_PS4_ADVERTISE_URL", "example", "http://192.168.1.20:8081")
-	} else if startErr := application.PS4.Content.Start(); startErr != nil {
-		logger.Error("[PS4] package server failed to start; panel remains available", "listen", application.PS4.Content.Listen, "error", startErr)
-	} else {
-		logger.Info("[PS4] package server ready", "listen", application.PS4.Content.Listen, "advertise_url", application.PS4.Content.AdvertiseURL)
-	}
-
 	ps5Count := 0
 	if _, statErr := os.Stat(application.PS5.GameDir); statErr == nil {
 		ps5Items, scanErr := application.PS5.LocalGames(ctx, "")
@@ -804,6 +797,19 @@ func initializeServe(ctx context.Context, logger *slog.Logger, application *app.
 		}
 	}
 	logger.Info("[APP] startup discovery completed", "duration", time.Since(started).Round(time.Millisecond), "ps2_games", ps2Count, "ps3_games", ps3Count, "ps4_packages", ps4Count, "ps5_games", ps5Count)
+}
+
+func startPS4PackageServer(logger *slog.Logger, content *ps4.ContentServer) {
+	if startErr := content.Start(); startErr != nil {
+		logger.Error("[PS4] package server failed to start; panel remains available", "listen", content.Listen, "error", startErr)
+		return
+	}
+	logger.Info("[PS4] package server ready", "listen", content.Listen, "index_url", "http://"+displayAddress(content.Listen)+"/", "health_url", "http://"+displayAddress(content.Listen)+"/healthz")
+	if advertiseErr := content.AdvertiseError(); advertiseErr != nil {
+		logger.Warn("[PS4] package installs are not configured; package index remains available", "error", advertiseErr, "required_env", "PS3MGR_PS4_ADVERTISE_URL", "example", "http://192.168.1.20:8081")
+		return
+	}
+	logger.Info("[PS4] package install URL configured", "advertise_url", content.AdvertiseURL)
 }
 
 func logServeEvents(ctx context.Context, logger *slog.Logger, application *app.Service) func() {

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,61 @@ func TestAdvertiseURLMustBeReachableByPS4(t *testing.T) {
 	}
 	if err := validateAdvertiseURL("http://192.168.1.20:8081"); err != nil {
 		t.Fatalf("reachable LAN URL rejected: %v", err)
+	}
+}
+
+func TestContentServerStartsWithoutAdvertiseURLAndExposesHealth(t *testing.T) {
+	server := NewContentServer("127.0.0.1:0", "", t.TempDir())
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(context.Background())
+	if !server.Running() {
+		t.Fatal("package server is not running")
+	}
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "{\"status\":\"ok\",\"service\":\"ps4-package-server\"}\n" {
+		t.Fatalf("health response: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if _, _, err := server.Register(Package{}); err == nil {
+		t.Fatal("install registration must still require an advertised URL")
+	}
+}
+
+func TestContentServerIndexesOnlyLibraryPackagesAndSupportsDirectRanges(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	packagePath := filepath.Join(nested, "Game One.pkg")
+	if err := os.WriteFile(packagePath, []byte("0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewContentServer("127.0.0.1:0", "", root)
+
+	index := httptest.NewRecorder()
+	server.Handler().ServeHTTP(index, httptest.NewRequest(http.MethodGet, "/", nil))
+	if index.Code != http.StatusOK || !strings.Contains(index.Body.String(), "/ps4-library/nested/Game%20One.pkg") || strings.Contains(index.Body.String(), "secret.txt") {
+		t.Fatalf("unexpected package index: status=%d body=%q", index.Code, index.Body.String())
+	}
+
+	download := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/ps4-library/nested/Game%20One.pkg", nil)
+	request.Header.Set("Range", "bytes=3-6")
+	server.Handler().ServeHTTP(download, request)
+	if download.Code != http.StatusPartialContent || download.Body.String() != "3456" {
+		t.Fatalf("direct package range: status=%d body=%q", download.Code, download.Body.String())
+	}
+
+	blocked := httptest.NewRecorder()
+	server.Handler().ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/ps4-library/secret.txt", nil))
+	if blocked.Code != http.StatusNotFound {
+		t.Fatalf("non-PKG file was exposed with status %d", blocked.Code)
 	}
 }

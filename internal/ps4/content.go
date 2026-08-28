@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,17 @@ type servedPackage struct {
 	name string
 }
 
+type indexedPackage struct {
+	Name string
+	URL  string
+	Size string
+}
+
+var packageIndexTemplate = template.Must(template.New("ps4-package-index").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PS4 Package Index</title><style>body{font:16px system-ui,sans-serif;max-width:70rem;margin:auto;padding:1rem;background:#111827;color:#f9fafb}a{color:#93c5fd;overflow-wrap:anywhere}li{margin:.8rem 0}small{color:#9ca3af}</style></head>
+<body><h1>PS4 Package Index</h1><p>{{len .}} package file(s) under the configured PS4 library.</p><ul>{{range .}}<li><a href="{{.URL}}">{{.Name}}</a> <small>{{.Size}}</small></li>{{else}}<li>No .pkg files found.</li>{{end}}</ul></body></html>`))
+
 func NewContentServer(listen, advertiseURL, root string) *ContentServer {
 	return &ContentServer{Listen: listen, AdvertiseURL: strings.TrimRight(advertiseURL, "/"), Root: root, files: make(map[string]servedPackage)}
 }
@@ -44,9 +57,6 @@ func (s *ContentServer) Start() error {
 	if s.Listen == "" {
 		s.Listen = "0.0.0.0:8081"
 	}
-	if err := validateAdvertiseURL(s.AdvertiseURL); err != nil {
-		return err
-	}
 	listener, err := net.Listen("tcp", s.Listen)
 	if err != nil {
 		return fmt.Errorf("listen for PS4 package downloads on %s: %w", s.Listen, err)
@@ -58,6 +68,12 @@ func (s *ContentServer) Start() error {
 }
 
 func (s *ContentServer) Register(pkg Package) ([]string, func(), error) {
+	// The listener can run without an advertised URL so operators can verify
+	// Docker port publishing independently. An install still needs a LAN URL
+	// that the console can reach.
+	if err := validateAdvertiseURL(s.AdvertiseURL); err != nil {
+		return nil, nil, err
+	}
 	if err := s.Start(); err != nil {
 		return nil, nil, err
 	}
@@ -132,6 +148,28 @@ func (s *ContentServer) Handler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if r.URL.Path == "/healthz" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			if r.Method != http.MethodHead {
+				_, _ = w.Write([]byte("{\"status\":\"ok\",\"service\":\"ps4-package-server\"}\n"))
+			}
+			return
+		}
+		if r.URL.Path == "/" {
+			s.serveIndex(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/ps4-library/") {
+			path, name, err := s.resolveLibraryPackage(strings.TrimPrefix(r.URL.EscapedPath(), "/ps4-library/"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			s.servePackage(w, r, servedPackage{path: path, name: name})
+			return
+		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/ps4-pkg/"), "/")
 		if len(parts) != 2 || parts[0] == "" {
 			http.NotFound(w, r)
@@ -149,20 +187,140 @@ func (s *ContentServer) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		file, err := os.Open(served.path)
-		if err != nil {
-			http.Error(w, "package unavailable", http.StatusGone)
-			return
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			http.Error(w, "package unavailable", http.StatusGone)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		http.ServeContent(w, r, served.name, info.ModTime(), file)
+		s.servePackage(w, r, served)
 	})
+}
+
+func (s *ContentServer) servePackage(w http.ResponseWriter, r *http.Request, served servedPackage) {
+	file, err := os.Open(served.path)
+	if err != nil {
+		http.Error(w, "package unavailable", http.StatusGone)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "package unavailable", http.StatusGone)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeContent(w, r, served.name, info.ModTime(), file)
+}
+
+func (s *ContentServer) serveIndex(w http.ResponseWriter, r *http.Request) {
+	items, err := s.indexedPackages()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err = packageIndexTemplate.Execute(w, items); err != nil {
+		return
+	}
+}
+
+func (s *ContentServer) indexedPackages() ([]indexedPackage, error) {
+	s.mu.RLock()
+	configuredRoot := s.Root
+	s.mu.RUnlock()
+	root, err := filepath.Abs(configuredRoot)
+	if err != nil {
+		return nil, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("PS4 library unavailable: %w", err)
+	}
+	items := make([]indexedPackage, 0)
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(entry.Name(), ".") || !strings.EqualFold(filepath.Ext(entry.Name()), ".pkg") {
+			return nil
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			return infoErr
+		}
+		relative, relativeErr := filepath.Rel(root, path)
+		if relativeErr != nil {
+			return relativeErr
+		}
+		items = append(items, indexedPackage{Name: filepath.ToSlash(relative), URL: packageLibraryURL(relative), Size: humanPackageSize(info.Size())})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("index PS4 packages: %w", err)
+	}
+	sort.Slice(items, func(i, j int) bool { return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name) })
+	return items, nil
+}
+
+func (s *ContentServer) resolveLibraryPackage(escapedRelative string) (string, string, error) {
+	relativeURL, err := url.PathUnescape(escapedRelative)
+	if err != nil || relativeURL == "" {
+		return "", "", fmt.Errorf("invalid package path")
+	}
+	relative := filepath.Clean(filepath.FromSlash(relativeURL))
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || !strings.EqualFold(filepath.Ext(relative), ".pkg") {
+		return "", "", fmt.Errorf("invalid package path")
+	}
+	s.mu.RLock()
+	configuredRoot := s.Root
+	s.mu.RUnlock()
+	root, err := filepath.Abs(configuredRoot)
+	if err != nil {
+		return "", "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", err
+	}
+	path, err := filepath.EvalSymlinks(filepath.Join(root, relative))
+	if err != nil {
+		return "", "", err
+	}
+	within, err := filepath.Rel(root, path)
+	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("package is outside the configured library")
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", "", fmt.Errorf("package unavailable")
+	}
+	return path, filepath.Base(path), nil
+}
+
+func packageLibraryURL(relative string) string {
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	for index := range parts {
+		parts[index] = url.PathEscape(parts[index])
+	}
+	return "/ps4-library/" + strings.Join(parts, "/")
+}
+
+func humanPackageSize(bytes int64) string {
+	const gib = 1 << 30
+	const mib = 1 << 20
+	if bytes >= gib {
+		return fmt.Sprintf("%.2f GiB", float64(bytes)/gib)
+	}
+	if bytes >= mib {
+		return fmt.Sprintf("%.2f MiB", float64(bytes)/mib)
+	}
+	return fmt.Sprintf("%d bytes", bytes)
 }
 
 func (s *ContentServer) Close(ctx context.Context) error {
@@ -182,6 +340,10 @@ func (s *ContentServer) Running() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.server != nil
+}
+
+func (s *ContentServer) AdvertiseError() error {
+	return validateAdvertiseURL(s.AdvertiseURL)
 }
 
 func validateAdvertiseURL(value string) error {

@@ -61,6 +61,8 @@ If `/ps2-usb` shows no target, inspect `GET /api/ps2/usb/status`. It reports the
 
 The container listens on `0.0.0.0:8080` for the panel and `0.0.0.0:8081` for PS4 PKG downloads. `PS3MGR_PS4_ADVERTISE_URL` is intentionally not given a Docker default because it must contain this host's real LAN IP, not `0.0.0.0`, `localhost`, or the container IP.
 
+Port `8081` is a dedicated PS4 package server, not a second copy of the panel. Its root, `http://HOST_LAN_IP:8081/`, indexes `.pkg` files recursively below `PS3MGR_PS4_GAME_DIR` and provides range-capable links. `http://HOST_LAN_IP:8081/healthz` returns a small JSON health response. Non-PKG files, paths outside the library, and symlink escapes are never served. Queue installs still use temporary unguessable URLs. The listener starts even when `PS3MGR_PS4_ADVERTISE_URL` is missing, but package installation remains disabled until that variable contains an address reachable from the PS4. Docker users must publish both `-p 8080:8080` and `-p 8081:8081` and recreate the container after changing either the environment or published ports.
+
 On Linux, host networking can make local PS3 discovery more predictable:
 
 ```sh

@@ -258,7 +258,12 @@ func (s *Service) Enqueue(consoleIP string, packageIDs []string, stopOnError boo
 }
 
 func (s *Service) ContentStatus() map[string]any {
-	return map[string]any{"listen": s.Content.Listen, "advertise_url": s.Content.AdvertiseURL, "configured": s.Content.AdvertiseURL != "", "running": s.Content.Running(), "rpi_port": s.RPI.Port}
+	status := map[string]any{"listen": s.Content.Listen, "advertise_url": s.Content.AdvertiseURL, "configured": true, "running": s.Content.Running(), "rpi_port": s.RPI.Port}
+	if err := s.Content.AdvertiseError(); err != nil {
+		status["configured"] = false
+		status["configuration_error"] = err.Error()
+	}
+	return status
 }
 
 func (s *Service) Close(ctx context.Context) error {
