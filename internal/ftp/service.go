@@ -158,6 +158,74 @@ func (s *Service) UploadGame(ctx context.Context, ip string, game domain.Game, r
 	})
 }
 
+// DownloadGame pulls a remote game into localRoot. Each file is staged as a
+// .part file so an interrupted download cannot appear as a complete game.
+func (s *Service) DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(Progress)) error {
+	if game.RemotePath == "" {
+		return fmt.Errorf("game %q has no remote path", game.Title)
+	}
+	if err := os.MkdirAll(localRoot, 0o755); err != nil {
+		return err
+	}
+	return s.downloadTree(ctx, ip, game.RemotePath, filepath.Join(localRoot, filepath.Base(path.Clean(game.RemotePath))), progress)
+}
+
+func (s *Service) downloadTree(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
+	client, err := s.connect(ctx, ip)
+	if err != nil {
+		return err
+	}
+	names, listErr := client.Names(ctx, remotePath)
+	client.Close()
+	if listErr != nil {
+		return s.downloadFile(ctx, ip, remotePath, localPath, progress)
+	}
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if name == "." || name == ".." || filepath.Base(name) != name {
+			continue
+		}
+		if err := s.downloadTree(ctx, ip, path.Join(remotePath, name), filepath.Join(localPath, name), progress); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return err
+	}
+	part := localPath + ".part"
+	file, err := os.Create(part)
+	if err != nil {
+		return err
+	}
+	client, err := s.connect(ctx, ip)
+	if err == nil {
+		err = client.Retrieve(ctx, remotePath, file, func(delta int64) {
+			if progress != nil {
+				progress(Progress{File: filepath.Base(localPath), Delta: delta})
+			}
+		})
+	}
+	closeErr := file.Close()
+	if client != nil {
+		client.Close()
+	}
+	if err != nil {
+		_ = os.Remove(part)
+		return fmt.Errorf("download %s: %w", remotePath, err)
+	}
+	if closeErr != nil {
+		_ = os.Remove(part)
+		return closeErr
+	}
+	return os.Rename(part, localPath)
+}
+
 func (s *Service) uploadFile(ctx context.Context, ip, localPath, remotePath string, progress func(int64)) error {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {

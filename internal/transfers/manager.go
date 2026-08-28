@@ -16,6 +16,10 @@ type Uploader interface {
 	UploadGame(ctx context.Context, ip string, game domain.Game, remoteRoot string, progress func(ps3ftp.Progress)) error
 }
 
+type Downloader interface {
+	DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(ps3ftp.Progress)) error
+}
+
 type Publisher interface {
 	Publish(eventType string, payload any)
 }
@@ -28,6 +32,8 @@ type Manager struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
 	uploader    Uploader
+	downloader  Downloader
+	localRoot   string
 	events      Publisher
 	remoteRoot  string
 	items       map[string]*domain.Transfer
@@ -52,6 +58,13 @@ func New(uploader Uploader, publisher Publisher, remoteRoot string) *Manager {
 
 func NewPlatform(uploader Uploader, publisher Publisher, remoteRoot string, platform domain.Platform) *Manager {
 	return newManager(uploader, publisher, remoteRoot, platform, string(platform))
+}
+
+func NewDownload(downloader Downloader, publisher Publisher, localRoot string, platform domain.Platform) *Manager {
+	m := newManager(nil, publisher, "", platform, string(platform)+".pull")
+	m.downloader = downloader
+	m.localRoot = localRoot
+	return m
 }
 
 func newManager(uploader Uploader, publisher Publisher, remoteRoot string, platform domain.Platform, eventPrefix string) *Manager {
@@ -262,7 +275,7 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 	m.update(item.ID, func(value *domain.Transfer) { value.State = domain.QueueTransferring })
 	started := time.Now()
 	var lastProgressEvent time.Time
-	err := m.uploader.UploadGame(ctx, item.ConsoleIP, item.Game, m.remoteRoot, func(progress ps3ftp.Progress) {
+	progressFn := func(progress ps3ftp.Progress) {
 		m.mu.Lock()
 		value := m.items[item.ID]
 		if value == nil {
@@ -291,7 +304,13 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 			lastProgressEvent = time.Now()
 			m.publish("queue.progress", snapshot)
 		}
-	})
+	}
+	var err error
+	if m.downloader != nil {
+		err = m.downloader.DownloadGame(ctx, item.ConsoleIP, item.Game, m.localRoot, progressFn)
+	} else {
+		err = m.uploader.UploadGame(ctx, item.ConsoleIP, item.Game, m.remoteRoot, progressFn)
+	}
 	if err != nil {
 		m.mu.Lock()
 		value := m.items[item.ID]

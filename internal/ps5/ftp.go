@@ -105,6 +105,10 @@ func (f *FTP) UploadGame(ctx context.Context, ip string, game domain.Game, remot
 	return f.uploader.UploadGame(ctx, ip, game, remoteRoot, progress)
 }
 
+func (f *FTP) DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(psftp.Progress)) error {
+	return f.uploader.DownloadGame(ctx, ip, game, localRoot, progress)
+}
+
 func containsFold(values []string, wanted string) bool {
 	for _, value := range values {
 		if strings.EqualFold(value, wanted) {

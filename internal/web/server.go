@@ -51,7 +51,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/consoles/{id}/rescan", s.rescanConsole)
 	s.mux.HandleFunc("GET /api/compare/{id}", s.compare)
 	s.mux.HandleFunc("POST /api/queue", s.enqueue)
-	s.mux.HandleFunc("GET /api/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Transfers.List()) })
+	s.mux.HandleFunc("POST /api/pull", s.pull)
+	s.mux.HandleFunc("GET /api/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Pulls.List()) })
+	s.mux.HandleFunc("GET /api/queue", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, append(s.app.Transfers.List(), s.app.Pulls.List()...))
+	})
 	s.mux.HandleFunc("GET /api/queue/{id}", s.queueItem)
 	s.mux.HandleFunc("POST /api/queue/{id}/cancel", s.cancel)
 	s.mux.HandleFunc("POST /api/queue/{id}/retry", s.retry)
@@ -93,6 +97,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps4/compare/{id}", s.ps4Compare)
 	s.mux.HandleFunc("GET /api/ps4/content/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.ContentStatus()) })
 	s.mux.HandleFunc("POST /api/ps4/queue", s.ps4Enqueue)
+	s.mux.HandleFunc("POST /api/ps4/pull", s.ps4Pull)
+	s.mux.HandleFunc("GET /api/ps4/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Pulls.List()) })
+	s.mux.HandleFunc("POST /api/ps4/pull-queue/{id}/cancel", s.ps4PullCancel)
+	s.mux.HandleFunc("POST /api/ps4/pull-queue/{id}/retry", s.ps4PullRetry)
 	s.mux.HandleFunc("GET /api/ps4/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Queue.List()) })
 	s.mux.HandleFunc("GET /api/ps4/queue/{id}", s.ps4QueueItem)
 	s.mux.HandleFunc("POST /api/ps4/queue/{id}/cancel", s.ps4Cancel)
@@ -118,7 +126,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/ps5/consoles/{id}/rescan", s.ps5RescanConsole)
 	s.mux.HandleFunc("GET /api/ps5/compare/{id}", s.ps5Compare)
 	s.mux.HandleFunc("POST /api/ps5/queue", s.ps5Enqueue)
-	s.mux.HandleFunc("GET /api/ps5/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Transfers.List()) })
+	s.mux.HandleFunc("POST /api/ps5/pull", s.ps5Pull)
+	s.mux.HandleFunc("GET /api/ps5/pull-queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Pulls.List()) })
+	s.mux.HandleFunc("GET /api/ps5/queue", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, append(s.app.PS5.Transfers.List(), s.app.PS5.Pulls.List()...))
+	})
 	s.mux.HandleFunc("GET /api/ps5/queue/{id}", s.ps5QueueItem)
 	s.mux.HandleFunc("POST /api/ps5/queue/{id}/cancel", s.ps5Cancel)
 	s.mux.HandleFunc("POST /api/ps5/queue/{id}/retry", s.ps5Retry)
@@ -139,6 +151,40 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("GET "+path, s.appShell)
 	}
 	s.mux.Handle("GET /", http.FileServer(http.FS(content)))
+}
+
+func (s *Server) ps4Pull(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConsoleID   string   `json:"console_id"`
+		GameIDs     []string `json:"game_ids"`
+		StopOnError bool     `json:"stop_on_error"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := s.app.PS4.EnqueuePull(r.Context(), request.ConsoleID, request.GameIDs, request.StopOnError)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, items)
+}
+
+func (s *Server) ps4PullCancel(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Pulls.Cancel(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ps4PullRetry(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Pulls.Retry(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) ps4Games(w http.ResponseWriter, r *http.Request) {
@@ -392,6 +438,9 @@ func (s *Server) ps5Enqueue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ps5QueueItem(w http.ResponseWriter, r *http.Request) {
 	item, ok := s.app.PS5.Transfers.Get(r.PathValue("id"))
 	if !ok {
+		item, ok = s.app.PS5.Pulls.Get(r.PathValue("id"))
+	}
+	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("PS5 transfer not found"))
 		return
 	}
@@ -399,7 +448,11 @@ func (s *Server) ps5QueueItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ps5Cancel(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.PS5.Transfers.Cancel(r.PathValue("id")); err != nil {
+	err := s.app.PS5.Transfers.Cancel(r.PathValue("id"))
+	if err != nil {
+		err = s.app.PS5.Pulls.Cancel(r.PathValue("id"))
+	}
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -407,7 +460,11 @@ func (s *Server) ps5Cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ps5Retry(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.PS5.Transfers.Retry(r.PathValue("id")); err != nil {
+	err := s.app.PS5.Transfers.Retry(r.PathValue("id"))
+	if err != nil {
+		err = s.app.PS5.Pulls.Retry(r.PathValue("id"))
+	}
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -642,8 +699,47 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, items)
 }
 
+func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConsoleID   string   `json:"console_id"`
+		GameIDs     []string `json:"game_ids"`
+		StopOnError bool     `json:"stop_on_error"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := s.app.EnqueuePull(request.ConsoleID, request.GameIDs, request.StopOnError)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, items)
+}
+
+func (s *Server) ps5Pull(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConsoleID   string   `json:"console_id"`
+		GameIDs     []string `json:"game_ids"`
+		StopOnError bool     `json:"stop_on_error"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := s.app.PS5.EnqueuePull(r.Context(), request.ConsoleID, request.GameIDs, request.StopOnError)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, items)
+}
+
 func (s *Server) queueItem(w http.ResponseWriter, r *http.Request) {
 	item, ok := s.app.Transfers.Get(r.PathValue("id"))
+	if !ok {
+		item, ok = s.app.Pulls.Get(r.PathValue("id"))
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("transfer not found"))
 		return
@@ -652,7 +748,11 @@ func (s *Server) queueItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.Transfers.Cancel(r.PathValue("id")); err != nil {
+	err := s.app.Transfers.Cancel(r.PathValue("id"))
+	if err != nil {
+		err = s.app.Pulls.Cancel(r.PathValue("id"))
+	}
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -660,7 +760,11 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.Transfers.Retry(r.PathValue("id")); err != nil {
+	err := s.app.Transfers.Retry(r.PathValue("id"))
+	if err != nil {
+		err = s.app.Pulls.Retry(r.PathValue("id"))
+	}
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

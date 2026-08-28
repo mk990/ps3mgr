@@ -21,6 +21,7 @@ Usage:
   ps3mgr ps4 add-console --ip IP [--json]
   ps3mgr ps4 compare --ip IP [--dir PATH] [--json]
   ps3mgr ps4 install --ip IP [--dir PATH] [--all] PACKAGE...
+  ps3mgr ps4 pull    --ip IP GAME...
   ps3mgr ps4 queue [--json]
 
 The PS4 must be running flatZ Remote Package Installer on port 12800.
@@ -41,11 +42,35 @@ PS3MGR_PS4_ADVERTISE_URL must be reachable by the PS4 for installs.
 		return r.ps4Compare(ctx, application, args[1:])
 	case "install":
 		return r.ps4Install(ctx, application, args[1:])
+	case "pull":
+		return r.ps4Pull(ctx, application, args[1:])
 	case "queue":
 		return r.ps4Queue(application, args[1:])
 	default:
 		return fmt.Errorf("unknown PS4 command %q", args[0])
 	}
+}
+
+func (r Runner) ps4Pull(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps4 pull", r.Err)
+	ip := set.String("ip", "", "PS4 IPv4 address (FTP port 2121)")
+	stopOnError := set.Bool("stop-on-error", false, "cancel remaining jobs after a failure")
+	asJSON := set.Bool("json", false, "print queued transfers as JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *ip == "" || set.NArg() == 0 {
+		return fmt.Errorf("--ip and at least one game are required")
+	}
+	items, err := application.PS4.EnqueuePull(ctx, *ip, set.Args(), *stopOnError)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return r.printValue(items, true)
+	}
+	fmt.Fprintf(r.Out, "Queued %d PS4 pull(s) from %s:2121 into %s.\n", len(items), *ip, application.Config.PS4GameDir)
+	return nil
 }
 
 func (r Runner) ps4LocalGames(ctx context.Context, application *app.Service, args []string) error {

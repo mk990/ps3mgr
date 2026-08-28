@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"ps3mgr/internal/domain"
+	ps3ftp "ps3mgr/internal/ftp"
+	"ps3mgr/internal/games"
 	"ps3mgr/internal/scanner"
+	"ps3mgr/internal/transfers"
 )
 
 // Service owns PS4 library, Remote Package Installer console, content server,
@@ -20,6 +23,8 @@ type Service struct {
 	GameDir string
 	Library Library
 	RPI     *RPIClient
+	FTP     *ps3ftp.Service
+	Pulls   *transfers.Manager
 	Content *ContentServer
 	Scanner *scanner.Scanner
 	Queue   *Queue
@@ -31,7 +36,36 @@ type Service struct {
 	consoles map[string]domain.Console
 }
 
-func NewService(gameDir, listen, advertiseURL string, rpiPort, workers int, scanTimeout, requestTimeout time.Duration, events Publisher) *Service {
+func (s *Service) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error) {
+	return s.FTP.RemoteGames(ctx, ip, s.FTP.RemoteRoot)
+}
+
+func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
+	remote, err := s.RemoteGames(ctx, consoleIP)
+	if err != nil {
+		return nil, err
+	}
+	if len(gameIDs) == 0 {
+		return nil, fmt.Errorf("game_ids cannot be empty")
+	}
+	selected := make([]domain.Game, 0, len(gameIDs))
+	for _, wanted := range gameIDs {
+		found := false
+		for _, game := range remote {
+			if strings.EqualFold(game.ID, wanted) || strings.EqualFold(game.Title, wanted) || games.NormalizeTitle(game.Title) == games.NormalizeTitle(wanted) {
+				selected = append(selected, game)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown remote PS4 game %q", wanted)
+		}
+	}
+	return s.Pulls.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
+}
+
+func NewService(gameDir, remoteGameDir, listen, advertiseURL string, rpiPort, workers int, scanTimeout, requestTimeout time.Duration, events Publisher) *Service {
 	if gameDir == "" {
 		gameDir = "./ps4-games"
 	}
@@ -42,10 +76,11 @@ func NewService(gameDir, listen, advertiseURL string, rpiPort, workers int, scan
 		scanTimeout = 500 * time.Millisecond
 	}
 	client := NewRPIClient(rpiPort, requestTimeout)
+	ftpService := &ps3ftp.Service{User: "anonymous", Timeout: requestTimeout, Port: "2121", RemoteRoot: remoteGameDir}
 	content := NewContentServer(listen, advertiseURL, gameDir)
 	covers := &CoverCache{}
 	return &Service{
-		GameDir: gameDir, RPI: client, Content: content, Covers: covers, events: events,
+		GameDir: gameDir, RPI: client, FTP: ftpService, Pulls: transfers.NewDownload(ftpService, events, gameDir, domain.PlatformPS4), Content: content, Covers: covers, events: events,
 		Scanner:  &scanner.Scanner{Detector: client, Workers: workers, Timeout: scanTimeout, DetectionTimeout: requestTimeout, Port: fmt.Sprint(rpiPort)},
 		Queue:    NewQueue(client, content, events),
 		consoles: make(map[string]domain.Console),
@@ -268,6 +303,9 @@ func (s *Service) ContentStatus() map[string]any {
 
 func (s *Service) Close(ctx context.Context) error {
 	if err := s.Queue.Close(ctx); err != nil {
+		return err
+	}
+	if err := s.Pulls.Close(ctx); err != nil {
 		return err
 	}
 	return s.Content.Close(ctx)

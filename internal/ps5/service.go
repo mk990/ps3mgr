@@ -29,6 +29,7 @@ type Service struct {
 	FTP       *FTP
 	Scanner   *scanner.Scanner
 	Transfers *transfers.Manager
+	Pulls     *transfers.Manager
 	events    Publisher
 
 	mu       sync.RWMutex
@@ -57,6 +58,7 @@ func NewService(gameDir, remoteDir, user, password string, port, workers int, sc
 		GameDir: gameDir, RemoteDir: remoteDir, FTP: ftpService, events: events,
 		Scanner:   &scanner.Scanner{Detector: ftpService, Workers: workers, Timeout: scanTimeout, DetectionTimeout: ftpTimeout, Port: fmt.Sprint(port)},
 		Transfers: transfers.NewPlatform(ftpService, events, remoteDir, domain.PlatformPS5),
+		Pulls:     transfers.NewDownload(ftpService, events, gameDir, domain.PlatformPS5),
 		consoles:  make(map[string]domain.Console),
 	}
 }
@@ -246,7 +248,40 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 	return s.Transfers.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
 }
 
-func (s *Service) Close(ctx context.Context) error { return s.Transfers.Close(ctx) }
+func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
+	if _, err := s.EnsureConsole(consoleIP); err != nil {
+		return nil, err
+	}
+	remote, err := s.RemoteGames(ctx, consoleIP)
+	if err != nil {
+		return nil, err
+	}
+	if len(gameIDs) == 0 {
+		return nil, fmt.Errorf("game_ids cannot be empty")
+	}
+	selected := make([]domain.Game, 0, len(gameIDs))
+	for _, wanted := range gameIDs {
+		found := false
+		for _, game := range remote {
+			if games.PublicID(game) == wanted || strings.EqualFold(game.Title, wanted) || strings.EqualFold(game.ID, wanted) {
+				selected = append(selected, game)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown remote PS5 game %q", wanted)
+		}
+	}
+	return s.Pulls.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
+}
+
+func (s *Service) Close(ctx context.Context) error {
+	if err := s.Transfers.Close(ctx); err != nil {
+		return err
+	}
+	return s.Pulls.Close(ctx)
+}
 
 func (s *Service) publish(eventType string, payload any) {
 	if s.events != nil {

@@ -29,6 +29,7 @@ type Service struct {
 	FTP       *ps3ftp.Service
 	Scanner   *scanner.Scanner
 	Transfers *transfers.Manager
+	Pulls     *transfers.Manager
 	PS2       *ps2.Service
 	PS4       *ps4.Service
 	PS5       *ps5.Service
@@ -56,7 +57,7 @@ func New(cfg config.Config) *Service {
 	service.Scanner = &scanner.Scanner{Detector: ftpService, Workers: cfg.Workers, Timeout: probeTimeout, DetectionTimeout: detectionTimeout}
 	service.Transfers = transfers.New(ftpService, bus, cfg.RemoteGameDir)
 	service.PS2 = ps2.NewService(cfg.PS2GameDir, cfg.PS2SystemDir, cfg.PS2USBRoot, bus)
-	service.PS4 = ps4.NewService(cfg.PS4GameDir, cfg.PS4PKGListen, cfg.PS4AdvertiseURL, cfg.PS4RPIPort, cfg.Workers, cfg.ScanTimeout, cfg.PS4RPITimeout, bus)
+	service.PS4 = ps4.NewService(cfg.PS4GameDir, cfg.PS4RemoteGameDir, cfg.PS4PKGListen, cfg.PS4AdvertiseURL, cfg.PS4RPIPort, cfg.Workers, cfg.ScanTimeout, cfg.PS4RPITimeout, bus)
 	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
 	if cfg.PS2CoverDownload {
 		service.PS2.Covers = ps2.NewCoverCache()
@@ -250,14 +251,49 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 	return s.Transfers.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
 }
 
+func (s *Service) EnqueuePull(consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
+	if _, err := s.EnsureConsole(consoleIP); err != nil {
+		return nil, err
+	}
+	remote, err := s.RemoteGames(context.Background(), consoleIP, "")
+	if err != nil {
+		return nil, err
+	}
+	if len(gameIDs) == 0 {
+		return nil, fmt.Errorf("game_ids cannot be empty")
+	}
+	selected := make([]domain.Game, 0, len(gameIDs))
+	for _, wanted := range gameIDs {
+		found := false
+		for _, game := range remote {
+			if games.PublicID(game) == wanted {
+				selected = append(selected, game)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown remote game %q", wanted)
+		}
+	}
+	return s.Pulls.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
+}
+
 func (s *Service) Close(ctx context.Context) error {
-	errors := make(chan error, 4)
+	errors := make(chan error, 5)
 	go func() { errors <- s.PS2.Close(ctx) }()
 	go func() { errors <- s.Transfers.Close(ctx) }()
+	go func() {
+		if s.Pulls == nil {
+			errors <- nil
+			return
+		}
+		errors <- s.Pulls.Close(ctx)
+	}()
 	go func() { errors <- s.PS4.Close(ctx) }()
 	go func() { errors <- s.PS5.Close(ctx) }()
 	var first error
-	for range 4 {
+	for range 5 {
 		if err := <-errors; err != nil && first == nil {
 			first = err
 		}

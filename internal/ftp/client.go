@@ -189,6 +189,59 @@ func (c *Client) Store(ctx context.Context, remotePath string, source io.Reader,
 	})
 }
 
+// Retrieve copies a remote file to destination and reports bytes received.
+func (c *Client) Retrieve(ctx context.Context, remotePath string, destination io.Writer, progress func(int64)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dataConn, err := c.openPassive(ctx)
+	if err != nil {
+		return err
+	}
+	defer dataConn.Close()
+	if err := c.writeLine(ctx, "RETR "+cleanPath(remotePath)); err != nil {
+		return err
+	}
+	code, message, err := c.readResponse(ctx)
+	if err != nil {
+		return err
+	}
+	if code != 125 && code != 150 {
+		return fmt.Errorf("FTP RETR failed: %d %s", code, message)
+	}
+	buffer := make([]byte, 256*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, readErr := dataConn.Read(buffer)
+		if n > 0 {
+			if _, err := destination.Write(buffer[:n]); err != nil {
+				return err
+			}
+			if progress != nil {
+				progress(int64(n))
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return readErr
+		}
+	}
+	if err := dataConn.Close(); err != nil {
+		return err
+	}
+	code, message, err = c.readResponse(ctx)
+	if err != nil {
+		return err
+	}
+	if code != 226 && code != 250 {
+		return fmt.Errorf("FTP transfer incomplete: %d %s", code, message)
+	}
+	return nil
+}
+
 func (c *Client) dataCommand(ctx context.Context, command string, destination io.Writer, upload func(net.Conn) error) error {
 	dataConn, err := c.openPassive(ctx)
 	if err != nil {

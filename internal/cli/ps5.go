@@ -23,6 +23,7 @@ Usage:
   ps3mgr ps5 games --ip IP [--json]
   ps3mgr ps5 compare --ip IP [--dir PATH] [--json]
   ps3mgr ps5 install --ip IP [--dir PATH] [--all] GAME...
+  ps3mgr ps5 pull    --ip IP GAME...
   ps3mgr ps5 queue [--json]
 
 The FTP destination is /data/etaHEN/games by default. The API never accepts
@@ -45,11 +46,35 @@ an arbitrary remote destination path.
 		return r.ps5Compare(ctx, application, args[1:])
 	case "install":
 		return r.ps5Install(ctx, application, args[1:])
+	case "pull":
+		return r.ps5Pull(ctx, application, args[1:])
 	case "queue":
 		return r.ps5Queue(application, args[1:])
 	default:
 		return fmt.Errorf("unknown PS5 command %q", args[0])
 	}
+}
+
+func (r Runner) ps5Pull(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps5 pull", r.Err)
+	ip := set.String("ip", "", "PS5 IPv4 address (FTP port 2121)")
+	stopOnError := set.Bool("stop-on-error", false, "cancel remaining jobs after a failure")
+	asJSON := set.Bool("json", false, "print queued transfers as JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *ip == "" || set.NArg() == 0 {
+		return fmt.Errorf("--ip and at least one game are required")
+	}
+	items, err := application.PS5.EnqueuePull(ctx, *ip, set.Args(), *stopOnError)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return r.printValue(items, true)
+	}
+	fmt.Fprintf(r.Out, "Queued %d PS5 pull(s) from %s:2121 into %s.\n", len(items), *ip, application.Config.PS5GameDir)
+	return nil
 }
 
 func (r Runner) ps5LocalGames(ctx context.Context, application *app.Service, args []string) error {

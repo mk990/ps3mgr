@@ -76,6 +76,8 @@ func (r Runner) Run(ctx context.Context, args []string) int {
 		commandErr = r.compare(ctx, application, args[1:])
 	case "install":
 		commandErr = r.install(ctx, application, args[1:])
+	case "pull":
+		commandErr = r.pull(ctx, application, args[1:])
 	case "serve":
 		commandErr = r.serve(ctx, application, args[1:])
 	case "ps2":
@@ -117,11 +119,35 @@ Commands:
   compare --ip <IP>     Compare the local library with a PS3
   install --ip <IP> <GAME...>
                          Install games sequentially
+  pull --ip <IP> <GAME...>
+                         Pull games from a PS3 into the local library
   serve                 Start the web panel (default 127.0.0.1:8080)
   version               Print the version
 
 Use "ps3mgr <command> --help" for command-specific options.
 `)
+}
+
+func (r Runner) pull(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("pull", r.Err)
+	ip := set.String("ip", "", "PS3 IPv4 address")
+	stopOnError := set.Bool("stop-on-error", false, "cancel remaining jobs after a failure")
+	asJSON := set.Bool("json", false, "print queued transfers as JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if *ip == "" || set.NArg() == 0 {
+		return fmt.Errorf("--ip and at least one game are required")
+	}
+	items, err := application.EnqueuePull(*ip, set.Args(), *stopOnError)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return r.printValue(items, true)
+	}
+	fmt.Fprintf(r.Out, "Queued %d PS3 pull(s) from %s into %s.\n", len(items), *ip, application.Config.PS3GameDir)
+	return nil
 }
 
 func (r Runner) ps2(ctx context.Context, application *app.Service, args []string) error {

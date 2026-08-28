@@ -15,6 +15,7 @@ type Config struct {
 	PS2USBRoot       string
 	PS2CoverDownload bool
 	PS4GameDir       string
+	PS4RemoteGameDir string
 	PS4RPIPort       int
 	PS4PKGListen     string
 	PS4AdvertiseURL  string
@@ -41,6 +42,7 @@ func Load() (Config, error) {
 		PS2USBRoot:       env("PS3MGR_PS2_USB_MOUNT_ROOT", "/mnt/usb"),
 		PS2CoverDownload: true,
 		PS4GameDir:       env("PS3MGR_PS4_GAME_DIR", "./ps4-games"),
+		PS4RemoteGameDir: env("PS3MGR_PS4_REMOTE_GAME_DIR", "/data/games"),
 		PS4RPIPort:       12800,
 		PS4PKGListen:     env("PS3MGR_PS4_PKG_LISTEN", "0.0.0.0:8081"),
 		PS4AdvertiseURL:  env("PS3MGR_PS4_ADVERTISE_URL", ""),

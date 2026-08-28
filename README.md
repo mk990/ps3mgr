@@ -171,6 +171,7 @@ ps3mgr ps4 scan 192.168.1.0/24 [--workers 32] [--json]
 ps3mgr ps4 add-console --ip 192.168.1.154 [--json]
 ps3mgr ps4 compare --ip 192.168.1.154 [--dir /data/ps4] [--json]
 ps3mgr ps4 install --ip 192.168.1.154 "CUSA12345"
+ps3mgr ps4 pull --ip 192.168.1.154 "Game title or ID"
 ps3mgr ps4 install --ip 192.168.1.154 --all
 ps3mgr ps4 queue [--json]
 ps3mgr ps5 --help
@@ -207,6 +208,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_PS2_USB_MOUNT_ROOT` | `/mnt/usb` | Parent containing discovered mounted USB directories |
 | `PS3MGR_PS2_COVER_DOWNLOAD` | `true` | Download only missing known-serial covers and cache them locally |
 | `PS3MGR_PS4_GAME_DIR` | `./ps4-games` | Recursive local PS4 `.pkg` library |
+| `PS3MGR_PS4_REMOTE_GAME_DIR` | `/data/games` | PS4 FTP (port 2121) remote game directory used by `ps4 pull` |
 | `PS3MGR_PS4_RPI_PORT` | `12800` | flatZ Remote Package Installer API port on the PS4 |
 | `PS3MGR_PS4_PKG_LISTEN` | `0.0.0.0:8081` | Local HTTP listener used to stream PKGs to the PS4 |
 | `PS3MGR_PS4_ADVERTISE_URL` | empty | Required for installs; HTTP URL with the manager host's LAN IP and package port |
