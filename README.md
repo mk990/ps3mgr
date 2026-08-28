@@ -45,6 +45,7 @@ docker run --rm \
   -v /data/games:/games:ro \
 	-v /data/ps2:/data/ps2 \
 	-v /data/ps4:/data/ps4:ro \
+	-v /data/ps4-covers:/data/ps4/covers \
 	-v /data/ps5:/data/ps5:ro \
 	-v /media/ps2-usb:/mnt/usb \
   ps3mgr:dev
@@ -69,6 +70,7 @@ docker run --rm \
 	-v /data/ps2:/data/ps2:ro \
 	-v /data/ps2-covers:/data/ps2/covers \
 	-v /data/ps4:/data/ps4:ro \
+	-v /data/ps4-covers:/data/ps4/covers \
 	-v /data/ps5:/data/ps5:ro \
 	-v /media/ps2-usb:/mnt/usb \
   ghcr.io/OWNER/ps3mgr:latest
@@ -230,6 +232,19 @@ Install and run [flatZ Remote Package Installer](https://github.com/flatz/ps4_re
 
 The local scanner accepts `.pkg` case-insensitively, validates the PS4 PKG magic, reads content/title IDs, classifies game, patch, DLC, and license content, and groups numbered multipart files. Multipart URLs are sent in consecutive order as required by RPI. Invalid files merely renamed to `.pkg` are ignored.
 
+### Offline PS4 covers
+
+PS4 cover handling is entirely local. During a scan, the manager reads the PKG file table and extracts its embedded `icon0` into `covers/<CUSA>.png` below `PS3MGR_PS4_GAME_DIR`. Existing cached images are reused without reopening the icon payload. A manually supplied image beside the first PKG part, or `covers/CUSAxxxxx.jpg`, `.jpeg`, `.png`, or `.webp`, takes priority over extraction.
+
+The browser receives only `/api/ps4/games/{id}/cover`; it never receives an external image URL. The PS4 Games page reports the resolved container cache path, cached-image count, and bind-mount permission errors. To keep PKGs read-only in Docker, mount a separate writable host directory over the cache:
+
+```text
+-v /data/ps4:/data/ps4:ro
+-v /data/ps4-covers:/data/ps4/covers
+```
+
+The writable cache directory must be accessible to the image's non-root UID `65532`.
+
 PS4 installation does not upload the package to the console. The manager starts a concurrent HTTP range server, creates an unguessable temporary URL for each selected part, and tells RPI to download those URLs. URLs are revoked after completion or failure and can only resolve files inside `PS3MGR_PS4_GAME_DIR`. The PS4 queue processes one package group at a time and runs independently from the PS2, PS3, and PS5 workers.
 
 `PS3MGR_PS4_PKG_LISTEN` is where the manager binds locally. `PS3MGR_PS4_ADVERTISE_URL` is the address sent to the PS4. For example, with a manager host at `192.168.1.20`, use `0.0.0.0:8081` for the listener and `http://192.168.1.20:8081` for the advertised URL. Allow TCP 8081 through the host firewall and publish that port from Docker. No external CDN, JavaScript, CSS, or image resource is used by the web panel.
@@ -293,6 +308,8 @@ GET    /api/ps2/queue/{id}
 POST   /api/ps2/queue/{id}/cancel
 POST   /api/ps2/queue/{id}/retry
 GET    /api/ps4/games
+GET    /api/ps4/games/{id}/cover
+GET    /api/ps4/covers/status
 POST   /api/ps4/scan
 GET    /api/ps4/consoles
 POST   /api/ps4/consoles

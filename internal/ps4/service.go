@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ type Service struct {
 	Content *ContentServer
 	Scanner *scanner.Scanner
 	Queue   *Queue
+	Covers  *CoverCache
 	events  Publisher
 
 	mu       sync.RWMutex
@@ -41,8 +43,9 @@ func NewService(gameDir, listen, advertiseURL string, rpiPort, workers int, scan
 	}
 	client := NewRPIClient(rpiPort, requestTimeout)
 	content := NewContentServer(listen, advertiseURL, gameDir)
+	covers := &CoverCache{}
 	return &Service{
-		GameDir: gameDir, RPI: client, Content: content, events: events,
+		GameDir: gameDir, RPI: client, Content: content, Covers: covers, events: events,
 		Scanner:  &scanner.Scanner{Detector: client, Workers: workers, Timeout: scanTimeout, DetectionTimeout: requestTimeout, Port: fmt.Sprint(rpiPort)},
 		Queue:    NewQueue(client, content, events),
 		consoles: make(map[string]domain.Console),
@@ -58,6 +61,13 @@ func (s *Service) LocalPackages(ctx context.Context, override string) ([]Package
 	if err != nil {
 		return nil, err
 	}
+	extracted, failures := s.Covers.Populate(ctx, root, items)
+	if extracted > 0 {
+		s.publish("ps4.covers.cached", map[string]any{"platform": Platform, "extracted": extracted, "directory": filepath.Join(root, "covers")})
+	}
+	if len(failures) > 0 {
+		s.publish("ps4.covers.failed", map[string]any{"platform": Platform, "failures": failures})
+	}
 	s.Content.SetRoot(root)
 	s.mu.Lock()
 	s.local = items
@@ -70,6 +80,33 @@ func (s *Service) CachedPackages() []Package {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return copyPackages(s.local)
+}
+
+func (s *Service) CoverStatus() CoverStatus { return s.Covers.Status(s.GameDir) }
+
+func (s *Service) Cover(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, pkg := range s.local {
+		if pkg.ID != id || pkg.CoverPath == "" {
+			continue
+		}
+		root, rootErr := filepath.EvalSymlinks(s.GameDir)
+		cover, coverErr := filepath.EvalSymlinks(pkg.CoverPath)
+		if rootErr != nil || coverErr != nil {
+			return "", false
+		}
+		root, rootErr = filepath.Abs(root)
+		cover, coverErr = filepath.Abs(cover)
+		if rootErr != nil || coverErr != nil {
+			return "", false
+		}
+		relative, err := filepath.Rel(root, cover)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return cover, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) Scan(ctx context.Context, cidr string, workers int) ([]domain.Console, error) {

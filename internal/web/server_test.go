@@ -155,6 +155,11 @@ func TestEmptyCollectionAPIsReturnArrays(t *testing.T) {
 			t.Errorf("GET %s returned %q, want []", path, got)
 		}
 	}
+	coverStatus := httptest.NewRecorder()
+	handler.ServeHTTP(coverStatus, httptest.NewRequest(http.MethodGet, "/api/ps4/covers/status", nil))
+	if coverStatus.Code != http.StatusOK || !strings.Contains(coverStatus.Body.String(), filepath.Join(ps4Root, "covers")) {
+		t.Fatalf("PS4 cover status = %d: %s", coverStatus.Code, coverStatus.Body.String())
+	}
 }
 
 func TestGameCardsUseWholeCardSelection(t *testing.T) {

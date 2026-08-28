@@ -744,6 +744,12 @@ func initializeServe(ctx context.Context, logger *slog.Logger, application *app.
 
 	ps4Count := 0
 	if _, statErr := os.Stat(application.PS4.GameDir); statErr == nil {
+		coverStatus := application.PS4.CoverStatus()
+		if coverStatus.Error != "" {
+			logger.Error("[PS4] cover cache unavailable; check Docker bind-mount ownership", "game_directory", coverStatus.GameDir, "cache", coverStatus.CacheDir, "error", coverStatus.Error)
+		} else {
+			logger.Info("[PS4] cover cache ready", "cache", coverStatus.CacheDir, "cached_images", coverStatus.Images, "writable", coverStatus.Writable, "source", "embedded PKG icon0")
+		}
 		ps4Items, scanErr := application.PS4.LocalPackages(ctx, "")
 		if scanErr != nil {
 			if ctx.Err() != nil {
@@ -836,6 +842,10 @@ func logServeEvents(ctx context.Context, logger *slog.Logger, application *app.S
 					logger.Info("[PS2] queue completed", "summary", event.Payload)
 				case "ps4.scan.started", "ps4.scan.completed":
 					logger.Info("[PS4] "+event.Type, "event", event.Payload)
+				case "ps4.covers.cached":
+					logger.Info("[PS4] embedded covers cached", "event", event.Payload)
+				case "ps4.covers.failed":
+					logger.Warn("[PS4] one or more covers could not be cached", "event", event.Payload)
 				case "ps4.console.connected", "ps4.scan.host_found":
 					if console, ok := event.Payload.(domain.Console); ok {
 						logger.Info("[PS4] console detected", "ip", console.IP, "api_port", console.APIPort)

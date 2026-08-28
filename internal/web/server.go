@@ -81,6 +81,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/cancel", s.ps2Cancel)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/retry", s.ps2Retry)
 	s.mux.HandleFunc("GET /api/ps4/games", s.ps4Games)
+	s.mux.HandleFunc("GET /api/ps4/games/{id}/cover", s.ps4Cover)
+	s.mux.HandleFunc("GET /api/ps4/covers/status", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.app.PS4.CoverStatus())
+	})
 	s.mux.HandleFunc("POST /api/ps4/scan", s.ps4Scan)
 	s.mux.HandleFunc("GET /api/ps4/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Consoles()) })
 	s.mux.HandleFunc("POST /api/ps4/consoles", s.ps4AddConsole)
@@ -144,6 +148,16 @@ func (s *Server) ps4Games(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) ps4Cover(w http.ResponseWriter, r *http.Request) {
+	path, ok := s.app.PS4.Cover(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) ps4Scan(w http.ResponseWriter, r *http.Request) {

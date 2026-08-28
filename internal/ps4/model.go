@@ -22,6 +22,8 @@ type Package struct {
 	Region    string        `json:"region,omitempty"`
 	Size      int64         `json:"size"`
 	Parts     []PackagePart `json:"parts"`
+	CoverPath string        `json:"-"`
+	CoverURL  string        `json:"cover_url,omitempty"`
 	Installed bool          `json:"installed"`
 }
 
