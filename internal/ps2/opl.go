@@ -61,7 +61,11 @@ func (f *Filesystem) Prepare(ctx context.Context, target USBTarget) error {
 			return fmt.Errorf("prepare OPL directory %s: %w", name, err)
 		}
 	}
-	return copyTree(ctx, f.SystemDir, target.MountPath)
+	systemDestination := filepath.Join(target.MountPath, "system")
+	if err := os.MkdirAll(systemDestination, 0755); err != nil {
+		return fmt.Errorf("prepare OPL system directory: %w", err)
+	}
+	return copyTree(ctx, f.SystemDir, systemDestination)
 }
 
 func (f *Filesystem) RequiredBytes() (int64, error) {

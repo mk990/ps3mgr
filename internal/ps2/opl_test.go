@@ -77,7 +77,7 @@ func TestDirectCopyPreparesLayoutSystemFilesAndVerifies(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "DVD", "SCES_517.19.Gran Turismo 4.iso")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "OPNPS2LD.ELF")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "system", "OPNPS2LD.ELF")); err != nil {
 		t.Fatal(err)
 	}
 	if err := fs.Verify(context.Background(), result); err != nil {

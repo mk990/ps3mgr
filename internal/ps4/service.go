@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,8 +37,147 @@ type Service struct {
 	consoles map[string]domain.Console
 }
 
+type pullDownloader struct {
+	ftp *ps3ftp.Service
+}
+
+func (d pullDownloader) DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(ps3ftp.Progress)) error {
+	baseName := ps4DownloadName(game)
+	basePath := game.RemotePath
+	if names, err := d.ftp.Names(ctx, ip, game.RemotePath); err == nil {
+		basePath = ""
+		for _, name := range names {
+			if strings.EqualFold(name, "app.pkg") {
+				basePath = path.Join(game.RemotePath, name)
+				break
+			}
+			if basePath == "" && strings.EqualFold(path.Ext(name), ".pkg") {
+				basePath = path.Join(game.RemotePath, name)
+			}
+		}
+		if basePath == "" {
+			return fmt.Errorf("installed PS4 game %s contains no app.pkg", game.ID)
+		}
+	}
+	if err := d.ftp.DownloadFile(ctx, ip, basePath, filepath.Join(localRoot, baseName+".pkg"), progress); err != nil {
+		return fmt.Errorf("download PS4 base game %s: %w", game.ID, err)
+	}
+	titleID := strings.ToUpper(titleIDPattern.FindString(game.ID))
+	if titleID == "" {
+		return nil
+	}
+	patchRoot := path.Join("/user/patch", titleID)
+	patches, err := d.ftp.Names(ctx, ip, patchRoot)
+	if err == nil {
+		patches = orderedPKGNames(patches)
+		for index, name := range patches {
+			remotePath := path.Join(patchRoot, name)
+			localPath := filepath.Join(localRoot, patchDownloadName(baseName, index))
+			if err := d.ftp.DownloadFile(ctx, ip, remotePath, localPath, progress); err != nil {
+				return fmt.Errorf("download PS4 update %s (%s): %w", titleID, name, err)
+			}
+		}
+	}
+	addcontRoot := path.Join("/user/addcont", titleID)
+	contentDirs, err := d.ftp.Names(ctx, ip, addcontRoot)
+	if err != nil {
+		return nil
+	}
+	sort.Slice(contentDirs, func(i, j int) bool { return strings.ToLower(contentDirs[i]) < strings.ToLower(contentDirs[j]) })
+	dlcIndex := 0
+	for _, contentDir := range contentDirs {
+		remoteDir := path.Join(addcontRoot, contentDir)
+		files, listErr := d.ftp.Names(ctx, ip, remoteDir)
+		if listErr != nil {
+			continue
+		}
+		for _, name := range files {
+			if !strings.EqualFold(name, "ac.pkg") {
+				continue
+			}
+			remotePath := path.Join(remoteDir, name)
+			localPath := filepath.Join(localRoot, dlcDownloadName(baseName, dlcIndex))
+			if err := d.ftp.DownloadFile(ctx, ip, remotePath, localPath, progress); err != nil {
+				return fmt.Errorf("download PS4 DLC %s (%s): %w", titleID, contentDir, err)
+			}
+			dlcIndex++
+		}
+	}
+	return nil
+}
+
+func ps4DownloadName(game domain.Game) string {
+	titleID := strings.ToUpper(titleIDPattern.FindString(game.ID))
+	if titleID == "" {
+		return ps3ftp.DownloadName(game)
+	}
+	if strings.EqualFold(strings.TrimSpace(game.Title), titleID) || strings.TrimSpace(game.Title) == "" {
+		return titleID
+	}
+	title := ps3ftp.DownloadName(domain.Game{Title: game.Title, RemotePath: game.RemotePath})
+	return title + " - " + titleID
+}
+
+func orderedPKGNames(names []string) []string {
+	packages := make([]string, 0, len(names))
+	for _, name := range names {
+		if strings.EqualFold(path.Ext(name), ".pkg") {
+			packages = append(packages, name)
+		}
+	}
+	sort.Slice(packages, func(i, j int) bool {
+		iPrimary := strings.EqualFold(packages[i], "patch.pkg")
+		jPrimary := strings.EqualFold(packages[j], "patch.pkg")
+		if iPrimary != jPrimary {
+			return iPrimary
+		}
+		return strings.ToLower(packages[i]) < strings.ToLower(packages[j])
+	})
+	return packages
+}
+
+func patchDownloadName(baseName string, index int) string {
+	if index == 0 {
+		return baseName + ".patch.pkg"
+	}
+	return fmt.Sprintf("%s.patch%02d.pkg", baseName, index)
+}
+
+func dlcDownloadName(baseName string, index int) string {
+	if index == 0 {
+		return baseName + ".DLC.pkg"
+	}
+	return fmt.Sprintf("%s.DLC%02d.pkg", baseName, index)
+}
+
 func (s *Service) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error) {
-	return s.FTP.RemoteGames(ctx, ip, s.FTP.RemoteRoot)
+	names, err := s.FTP.Names(ctx, ip, s.FTP.RemoteRoot)
+	if err != nil {
+		return nil, fmt.Errorf("list remote PS4 games: %w", err)
+	}
+	s.mu.RLock()
+	local := copyPackages(s.local)
+	s.mu.RUnlock()
+	items := make([]domain.Game, 0, len(names))
+	for _, name := range names {
+		item := domain.Game{
+			ID:         strings.ToUpper(titleIDPattern.FindString(name)),
+			Title:      name,
+			RemotePath: path.Join(s.FTP.RemoteRoot, name),
+			Installed:  true,
+			State:      domain.StateInstalled,
+		}
+		for _, pkg := range local {
+			if item.ID != "" && strings.EqualFold(pkg.TitleID, item.ID) {
+				item.Title = pkg.Title
+				item.Version = pkg.Version
+				break
+			}
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return strings.ToLower(items[i].Title) < strings.ToLower(items[j].Title) })
+	return items, nil
 }
 
 func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
@@ -80,7 +220,7 @@ func NewService(gameDir, remoteGameDir, listen, advertiseURL string, rpiPort, wo
 	content := NewContentServer(listen, advertiseURL, gameDir)
 	covers := &CoverCache{}
 	return &Service{
-		GameDir: gameDir, RPI: client, FTP: ftpService, Pulls: transfers.NewDownload(ftpService, events, gameDir, domain.PlatformPS4), Content: content, Covers: covers, events: events,
+		GameDir: gameDir, RPI: client, FTP: ftpService, Pulls: transfers.NewDownload(pullDownloader{ftp: ftpService}, events, gameDir, domain.PlatformPS4), Content: content, Covers: covers, events: events,
 		Scanner:  &scanner.Scanner{Detector: client, Workers: workers, Timeout: scanTimeout, DetectionTimeout: requestTimeout, Port: fmt.Sprint(rpiPort)},
 		Queue:    NewQueue(client, content, events),
 		consoles: make(map[string]domain.Console),

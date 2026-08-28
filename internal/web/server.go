@@ -102,6 +102,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps4/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Consoles()) })
 	s.mux.HandleFunc("POST /api/ps4/consoles", s.ps4AddConsole)
 	s.mux.HandleFunc("GET /api/ps4/consoles/{id}", s.ps4Console)
+	s.mux.HandleFunc("GET /api/ps4/consoles/{id}/games", s.ps4RemoteGames)
 	s.mux.HandleFunc("POST /api/ps4/consoles/{id}/rescan", s.ps4RescanConsole)
 	s.mux.HandleFunc("GET /api/ps4/compare/{id}", s.ps4Compare)
 	s.mux.HandleFunc("GET /api/ps4/content/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.ContentStatus()) })
@@ -263,6 +264,15 @@ func (s *Server) ps4Console(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, console)
+}
+
+func (s *Server) ps4RemoteGames(w http.ResponseWriter, r *http.Request) {
+	items, err := s.app.PS4.RemoteGames(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) ps4Compare(w http.ResponseWriter, r *http.Request) {

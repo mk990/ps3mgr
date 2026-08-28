@@ -253,13 +253,15 @@ PS4 installation does not upload the package to the console. The manager starts 
 
 `PS3MGR_PS4_PKG_LISTEN` is where the manager binds locally. `PS3MGR_PS4_ADVERTISE_URL` is the address sent to the PS4. For example, with a manager host at `192.168.1.20`, use `0.0.0.0:8081` for the listener and `http://192.168.1.20:8081` for the advertised URL. Allow TCP 8081 through the host firewall and publish that port from Docker. No external CDN, JavaScript, CSS, or image resource is used by the web panel.
 
+PS4 pulls use FTP port 2121. Each selected `app.pkg` from `PS3MGR_PS4_REMOTE_GAME_DIR` is copied directly into the local PS4 library as `<title> - <CUSA>.pkg`, without a containing game directory. Update packages found below `/user/patch/<CUSA>` are saved beside it as `<title> - <CUSA>.patch.pkg`, followed by `.patch01.pkg`, `.patch02.pkg`, and so on when more than one update PKG exists. DLC packages found at `/user/addcont/<CUSA>/*/ac.pkg` are saved as `<title> - <CUSA>.DLC.pkg`, then `.DLC01.pkg`, `.DLC02.pkg`, and so on.
+
 ## PS2 / Open PS2 Loader behavior
 
 The PS2 scanner accepts `.iso` case-insensitively and reads `SYSTEM.CNF` directly from ISO9660 images to identify serials including `SLUS`, `SLES`, `SCUS`, `SCES`, `SLPM`, `SLPS`, and related legitimate prefixes. Filename detection is a fallback; an unidentified ISO remains visible as `unknown` but cannot be installed until it has a reliable game ID.
 
 For FAT32-compatible images, the installer writes OPL's `DVD/<SERIAL>.<title>.iso` layout. Images above the FAT32 single-file limit use the official USBExtreme layout: 1 GiB `ul.<crc>.<serial>.<part>` files plus fixed 64-byte records in the root `ul.cfg`. Existing unrelated `ul.cfg` records are preserved. Writes use `.partial` files, support cancellation, and are verified before completion.
 
-The configured PS2 system directory must exist and contain files before installation. The installer prepares standard OPL directories (`DVD`, `CD`, `ART`, `CFG`, `VMC`, `THM`, and `APPS`) and copies the configured system tree without invoking Bash, `cp`, `df`, `iso2opl`, or another shell utility.
+The configured PS2 system directory must exist and contain files before installation. The installer prepares standard OPL directories (`DVD`, `CD`, `ART`, `CFG`, `VMC`, `THM`, and `APPS`) and copies the configured system tree into the USB target's `system` directory without invoking Bash, `cp`, `df`, `iso2opl`, or another shell utility.
 
 ## PS5 / ShadowMountPlus behavior
 
@@ -318,6 +320,7 @@ POST   /api/ps4/scan
 GET    /api/ps4/consoles
 POST   /api/ps4/consoles
 GET    /api/ps4/consoles/{id}
+GET    /api/ps4/consoles/{id}/games
 POST   /api/ps4/consoles/{id}/rescan
 GET    /api/ps4/compare/{id}
 GET    /api/ps4/content/status

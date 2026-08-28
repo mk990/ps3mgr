@@ -92,6 +92,15 @@ func (s *Service) RemoteGames(ctx context.Context, ip, remoteRoot string) ([]dom
 	return result, nil
 }
 
+func (s *Service) Names(ctx context.Context, ip, remotePath string) ([]string, error) {
+	client, err := s.connect(ctx, ip)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	return client.Names(ctx, remotePath)
+}
+
 func (s *Service) UploadGame(ctx context.Context, ip string, game domain.Game, remoteRoot string, progress func(Progress)) error {
 	if game.LocalPath == "" {
 		return fmt.Errorf("game %q has no local path", game.Title)
@@ -167,7 +176,40 @@ func (s *Service) DownloadGame(ctx context.Context, ip string, game domain.Game,
 	if err := os.MkdirAll(localRoot, 0o755); err != nil {
 		return err
 	}
-	return s.downloadTree(ctx, ip, game.RemotePath, filepath.Join(localRoot, filepath.Base(path.Clean(game.RemotePath))), progress)
+	return s.downloadTree(ctx, ip, game.RemotePath, filepath.Join(localRoot, DownloadName(game)), progress)
+}
+
+func DownloadName(game domain.Game) string {
+	name := strings.TrimSpace(game.Title)
+	if game.ID != "" {
+		if name == "" {
+			name = game.ID
+		} else {
+			name = game.ID + " - " + name
+		}
+	}
+	name = strings.Map(func(char rune) rune {
+		switch {
+		case char == '/' || char == '\\' || char == ':' || char == '*' || char == '?' || char == '"' || char == '<' || char == '>' || char == '|':
+			return '-'
+		case char < 32:
+			return -1
+		default:
+			return char
+		}
+	}, name)
+	name = strings.Trim(name, " .")
+	if name == "" {
+		name = filepath.Base(path.Clean(game.RemotePath))
+	}
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return "Game"
+	}
+	return name
+}
+
+func (s *Service) DownloadFile(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
+	return s.downloadFile(ctx, ip, remotePath, localPath, progress)
 }
 
 func (s *Service) downloadTree(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
