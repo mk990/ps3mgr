@@ -62,6 +62,50 @@ func TestQueueProcessesPackagesSequentially(t *testing.T) {
 	t.Fatalf("queue did not complete: %+v", queue.List())
 }
 
+type unverifiedInstaller struct {
+	mu        sync.Mutex
+	cancelled []int
+}
+
+func (*unverifiedInstaller) Install(context.Context, string, []string) (int, error) { return 7, nil }
+func (*unverifiedInstaller) Progress(context.Context, string, int) (InstallProgress, error) {
+	return InstallProgress{Transferred: 100, Total: 100, Complete: true}, nil
+}
+func (*unverifiedInstaller) IsInstalled(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (u *unverifiedInstaller) Cancel(_ context.Context, _ string, taskID int) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.cancelled = append(u.cancelled, taskID)
+	return nil
+}
+
+func TestQueueUnregistersTaskWhenPostInstallVerificationFails(t *testing.T) {
+	installer := &unverifiedInstaller{}
+	queue := NewQueue(installer, testProvider{}, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "unverified", TitleID: "CUSA10416", Format: "pkg-game", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		last, _ := queue.Get(items[0].ID)
+		if last.State == StateFailed {
+			installer.mu.Lock()
+			defer installer.mu.Unlock()
+			if len(installer.cancelled) != 1 || installer.cancelled[0] != 7 {
+				t.Fatalf("expected leftover task 7 to be cancelled, got %v", installer.cancelled)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("queue did not fail: %+v", queue.List())
+}
+
 type blockingInstaller struct{ started chan struct{} }
 
 func (b blockingInstaller) Install(ctx context.Context, _ string, _ []string) (int, error) {

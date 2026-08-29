@@ -260,15 +260,26 @@ func (q *Queue) process(ctx context.Context, id string) error {
 	q.publish("ps4.install.requested", q.snapshot(id))
 	q.setState(id, StateDownloading)
 
+	// The RPI task stays registered on the console until explicitly
+	// unregistered; any return path other than a verified success must clean
+	// it up, or the next attempt for the same content ID fails immediately
+	// with a "task already exists" error from the console's BGFT service.
+	succeeded := false
+	defer func() {
+		if succeeded {
+			return
+		}
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = q.installer.Cancel(cancelCtx, job.ConsoleIP, taskID)
+		cancel()
+	}()
+
 	lastBytes, lastTime := int64(0), time.Now()
 	ticker := time.NewTicker(q.pollEvery)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = q.installer.Cancel(cancelCtx, job.ConsoleIP, taskID)
-			cancel()
 			return ctx.Err()
 		case <-ticker.C:
 			progress, err := q.installer.Progress(ctx, job.ConsoleIP, taskID)
@@ -311,6 +322,7 @@ func (q *Queue) process(ctx context.Context, id string) error {
 						return fmt.Errorf("Remote Package Installer finished but %s is not installed", job.Package.TitleID)
 					}
 				}
+				succeeded = true
 				return nil
 			}
 		}
