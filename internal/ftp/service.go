@@ -251,9 +251,11 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 		return err
 	}
 	offset := info.Size()
+	expectedSize := int64(-1)
 	client, err := s.connect(ctx, ip)
 	if err == nil {
 		if remoteSize, sizeErr := client.Size(ctx, remotePath); sizeErr == nil {
+			expectedSize = remoteSize
 			switch {
 			case offset == remoteSize && offset > 0:
 				if progress != nil {
@@ -307,6 +309,11 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 				})
 			}
 		}
+		if err == nil {
+			if remoteSize, sizeErr := client.Size(ctx, remotePath); sizeErr == nil {
+				expectedSize = remoteSize
+			}
+		}
 	}
 
 completed:
@@ -319,6 +326,15 @@ completed:
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	if expectedSize >= 0 {
+		info, statErr := os.Stat(part)
+		if statErr != nil {
+			return fmt.Errorf("verify downloaded file %s: %w", remotePath, statErr)
+		}
+		if err := verifyTransferSize("download", remotePath, info.Size(), expectedSize); err != nil {
+			return err
+		}
 	}
 	return os.Rename(part, localPath)
 }
@@ -381,6 +397,11 @@ func (s *Service) uploadFile(ctx context.Context, ip, localPath, remotePath stri
 				})
 			}
 		}
+		if err == nil {
+			if remoteSize, sizeErr := client.Size(ctx, remotePath); sizeErr == nil {
+				err = verifyTransferSize("upload", remotePath, remoteSize, info.Size())
+			}
+		}
 		file.Close()
 		if client != nil {
 			client.Close()
@@ -394,6 +415,13 @@ func (s *Service) uploadFile(ctx context.Context, ip, localPath, remotePath stri
 		}
 	}
 	return fmt.Errorf("upload %s after retries: %w", filepath.Base(localPath), lastErr)
+}
+
+func verifyTransferSize(operation, remotePath string, actual, expected int64) error {
+	if actual != expected {
+		return fmt.Errorf("%s integrity check failed for %s: got %d bytes, expected %d", operation, remotePath, actual, expected)
+	}
+	return nil
 }
 
 func containsFold(values []string, wanted string) bool {

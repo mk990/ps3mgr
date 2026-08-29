@@ -102,6 +102,32 @@ func TestDownloadFilePreservesPartAfterInterruption(t *testing.T) {
 	}
 }
 
+func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
+	server := newDownloadFTPServer(t, []byte("hello world"), true, 0)
+	server.reportedSize++
+	defer server.Close()
+
+	localPath := filepath.Join(t.TempDir(), "game.bin")
+	service := Service{Port: server.Port(), User: "anonymous", Timeout: time.Second}
+	err := service.DownloadFile(context.Background(), "127.0.0.1", "/game.bin", localPath, nil)
+	if err == nil || !strings.Contains(err.Error(), "download integrity check failed") {
+		t.Fatalf("size mismatch error = %v", err)
+	}
+	assertFileContents(t, localPath+".part", "hello world")
+	if _, err := os.Stat(localPath); !os.IsNotExist(err) {
+		t.Fatalf("finished path exists after integrity failure: %v", err)
+	}
+}
+
+func TestVerifyTransferSize(t *testing.T) {
+	if err := verifyTransferSize("upload", "/remote/game.bin", 12, 12); err != nil {
+		t.Fatalf("matching size rejected: %v", err)
+	}
+	if err := verifyTransferSize("upload", "/remote/game.bin", 11, 12); err == nil || !strings.Contains(err.Error(), "upload integrity check failed") {
+		t.Fatalf("mismatching size error = %v", err)
+	}
+}
+
 func assertFileContents(t *testing.T, path, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -118,6 +144,7 @@ type downloadFTPServer struct {
 	payload        []byte
 	resume         bool
 	interruptAfter int
+	reportedSize   int
 	wg             sync.WaitGroup
 	mu             sync.Mutex
 	restOffsets    []int64
@@ -130,7 +157,7 @@ func newDownloadFTPServer(t *testing.T, payload []byte, resume bool, interruptAf
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &downloadFTPServer{listener: listener, payload: payload, resume: resume, interruptAfter: interruptAfter}
+	server := &downloadFTPServer{listener: listener, payload: payload, resume: resume, interruptAfter: interruptAfter, reportedSize: len(payload)}
 	server.wg.Add(1)
 	go server.serve()
 	return server
@@ -201,7 +228,7 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 		case "TYPE":
 			respond(200, "binary mode")
 		case "SIZE":
-			respond(213, strconv.Itoa(len(s.payload)))
+			respond(213, strconv.Itoa(s.reportedSize))
 		case "REST":
 			requested, _ := strconv.ParseInt(argument, 10, 64)
 			s.mu.Lock()

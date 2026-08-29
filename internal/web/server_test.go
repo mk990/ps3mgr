@@ -108,6 +108,70 @@ func TestMutatingAPIsRejectCrossOriginBrowserRequests(t *testing.T) {
 	}
 }
 
+func TestReadinessEndpointUsesServiceUnavailableForMissingLibrary(t *testing.T) {
+	root := t.TempDir()
+	application := app.New(config.Config{
+		PS3GameDir:    root,
+		PS2GameDir:    root,
+		PS2SystemDir:  root,
+		PS2USBRoot:    root,
+		PS4GameDir:    root,
+		PS5GameDir:    filepath.Join(root, "missing"),
+		RemoteGameDir: "/dev_hdd0/GAMES",
+		FTPTimeout:    time.Second,
+		Workers:       1,
+	})
+	defer application.Close(context.Background())
+
+	response := httptest.NewRecorder()
+	New(application).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/ready", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d body=%s", response.Code, response.Body.String())
+	}
+	for _, required := range []string{`"status":"not_ready"`, `"name":"ps5_library"`, `"required":true`} {
+		if !strings.Contains(response.Body.String(), required) {
+			t.Errorf("readiness response missing %s: %s", required, response.Body.String())
+		}
+	}
+}
+
+func TestJSONAndOriginValidationFailurePaths(t *testing.T) {
+	root := t.TempDir()
+	application := app.New(config.Config{
+		PS3GameDir: root, PS2GameDir: root, PS2SystemDir: root, PS2USBRoot: root,
+		PS4GameDir: root, PS5GameDir: root, RemoteGameDir: "/dev_hdd0/GAMES",
+		FTPTimeout: time.Second, Workers: 1,
+	})
+	defer application.Close(context.Background())
+	handler := New(application).Handler()
+
+	tests := []struct {
+		name   string
+		body   string
+		origin string
+		want   int
+	}{
+		{name: "malformed JSON", body: `{`, want: http.StatusBadRequest},
+		{name: "unknown field", body: `{"cidr":"192.168.1.0/24","extra":true}`, want: http.StatusBadRequest},
+		{name: "multiple objects", body: `{"cidr":"192.168.1.0/24"}{}`, want: http.StatusBadRequest},
+		{name: "opaque origin", body: `{"cidr":"192.168.1.0/24"}`, origin: "null", want: http.StatusForbidden},
+		{name: "non-HTTP origin", body: `{"cidr":"192.168.1.0/24"}`, origin: "file://manager.local", want: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "http://manager.local/api/scan", strings.NewReader(test.body))
+			if test.origin != "" {
+				request.Header.Set("Origin", test.origin)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestPS2APIsUseDiscoveredTargetIDs(t *testing.T) {
 	ps3Root, ps2Root, systemRoot, usbRoot := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(ps3Root, "Game"), 0755); err != nil {

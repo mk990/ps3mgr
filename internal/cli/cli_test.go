@@ -117,6 +117,30 @@ func TestPS4HelpAndLocalPackageOverride(t *testing.T) {
 	}
 }
 
+func TestCommandValidationFailures(t *testing.T) {
+	t.Setenv("PS3MGR_PS2_COVER_DOWNLOAD", "false")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "PS3 pull arguments", args: []string{"pull"}, want: "--ip and at least one game"},
+		{name: "unknown PS2 command", args: []string{"ps2", "unknown"}, want: "unknown PS2 command"},
+		{name: "PS4 scan CIDR", args: []string{"ps4", "scan"}, want: "one private CIDR"},
+		{name: "PS5 install arguments", args: []string{"ps5", "install"}, want: "--ip is required"},
+		{name: "serve flag", args: []string{"serve", "--unknown"}, want: "flag provided but not defined"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output, errorOutput bytes.Buffer
+			code := (Runner{Out: &output, Err: &errorOutput}).Run(context.Background(), test.args)
+			if code != 1 || !strings.Contains(errorOutput.String(), test.want) {
+				t.Fatalf("code=%d output=%q errors=%q", code, output.String(), errorOutput.String())
+			}
+		})
+	}
+}
+
 func TestServeListensBeforeSlowLibraryInitialization(t *testing.T) {
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

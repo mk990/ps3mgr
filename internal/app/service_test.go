@@ -3,10 +3,54 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"ps3mgr/internal/config"
 )
+
+func TestReadinessReportsRequiredAndOptionalChecks(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	service := New(config.Config{
+		PS3GameDir:    root,
+		PS2GameDir:    root,
+		PS2SystemDir:  missing,
+		PS2USBRoot:    missing,
+		PS4GameDir:    root,
+		PS5GameDir:    root,
+		RemoteGameDir: "/dev_hdd0/GAMES",
+		FTPTimeout:    time.Second,
+		Workers:       1,
+	})
+	defer service.Close(context.Background())
+
+	report := service.Readiness()
+	if !report.Ready || report.Status != "ready_with_warnings" {
+		t.Fatalf("readiness = %+v", report)
+	}
+
+	service.PS5.GameDir = missing
+	report = service.Readiness()
+	if report.Ready || report.Status != "not_ready" {
+		t.Fatalf("missing required library readiness = %+v", report)
+	}
+
+	filePath := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(filePath, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := directoryCheck("fixture", filePath, true)
+	if check.Status == "ok" || check.Detail == "" {
+		t.Fatalf("file readiness check = %+v", check)
+	}
+	cacheCheck := writableDirectoryCheck("fixture_cache", filePath)
+	if cacheCheck.Status != "warning" || cacheCheck.Detail == "" {
+		t.Fatalf("cache readiness check = %+v", cacheCheck)
+	}
+}
 
 type directDetector struct {
 	detected bool

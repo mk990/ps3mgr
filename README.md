@@ -25,7 +25,7 @@ export PS3MGR_PS5_FTP_PORT=2121
 ./ps3mgr serve
 ```
 
-Open `http://127.0.0.1:8080`. The server binds to localhost by default so it is not accidentally exposed to the LAN.
+Open `http://127.0.0.1:8080`. The server binds to localhost by default so it is not accidentally exposed to the LAN. `GET /api/health` is a lightweight liveness check; `GET /api/ready` validates the configured library directories and reports optional PS2 USB/system, cover-cache, and PS4 package-server warnings. Readiness returns HTTP 503 when a required library is inaccessible.
 
 Platform pages have stable, refresh-safe paths: `/ps2-games`, `/ps2-usb`, `/ps2-queue`, `/ps3-games`, `/ps3-consoles`, `/ps3-scan`, `/ps3-queue`, `/ps4-games`, `/ps4-consoles`, `/ps4-scan`, `/ps4-queue`, `/ps5-games`, `/ps5-consoles`, `/ps5-scan`, and `/ps5-queue` (with `/dashboard` for the overview).
 
@@ -277,7 +277,7 @@ Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` 
 - The detector confirms PS3 filesystem markers such as `/dev_hdd0` or `/dev_flash`; an arbitrary FTP server is not reported as a PS3.
 - Configure credentials if the FTP server does not allow anonymous access.
 
-The FTP client supports passive mode (EPSV with PASV fallback), binary transfers, directory creation, per-file retries, reconnection, `REST`-based resume where supported, and cancellation. A completed remote file is skipped during a resumed installation. Interrupted console downloads retain their incomplete `.part` files and continue from the saved byte offset when retried; servers without download-resume support safely restart only that file from zero.
+The FTP client supports passive mode (EPSV with PASV fallback), binary transfers, directory creation, per-file retries, reconnection, `REST`-based resume where supported, and cancellation. A completed remote file is skipped during a resumed installation. Interrupted console downloads retain their incomplete `.part` files and continue from the saved byte offset when retried; servers without download-resume support safely restart only that file from zero. When the FTP server implements `SIZE`, completed uploads and downloads are verified against the remote byte count before they are accepted.
 
 ## PS3 transfer behavior
 
