@@ -19,11 +19,12 @@ import (
 )
 
 type Service struct {
-	User       string
-	Password   string
-	Timeout    time.Duration
-	RemoteRoot string
-	Port       string
+	User                  string
+	Password              string
+	Timeout               time.Duration
+	RemoteRoot            string
+	Port                  string
+	DisableSELFDecryption bool
 }
 
 type Progress struct {
@@ -36,7 +37,17 @@ func (s *Service) connect(ctx context.Context, ip string) (*Client, error) {
 	if s.Port != "" {
 		endpoint = net.JoinHostPort(ip, s.Port)
 	}
-	return Dial(ctx, endpoint, s.User, s.Password, s.Timeout)
+	client, err := Dial(ctx, endpoint, s.User, s.Password, s.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	if s.DisableSELFDecryption {
+		if err := client.DisableSELFDecryption(ctx); err != nil {
+			client.Close()
+			return nil, fmt.Errorf("configure raw FTP transfers: %w", err)
+		}
+	}
+	return client, nil
 }
 
 func (s *Service) Detect(ctx context.Context, ip string) (bool, int, error) {

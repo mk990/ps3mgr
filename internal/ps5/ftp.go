@@ -30,12 +30,20 @@ func NewFTP(user, password string, timeout time.Duration, port int, remoteRoot s
 		port = DefaultFTPPort
 	}
 	f := &FTP{User: user, Password: password, Timeout: timeout, Port: port, RemoteRoot: remoteRoot}
-	f.uploader = &psftp.Service{User: user, Password: password, Timeout: timeout, Port: strconv.Itoa(port), RemoteRoot: remoteRoot}
+	f.uploader = &psftp.Service{User: user, Password: password, Timeout: timeout, Port: strconv.Itoa(port), RemoteRoot: remoteRoot, DisableSELFDecryption: true}
 	return f
 }
 
 func (f *FTP) connect(ctx context.Context, ip string) (*psftp.Client, error) {
-	return psftp.Dial(ctx, net.JoinHostPort(ip, strconv.Itoa(f.Port)), f.User, f.Password, f.Timeout)
+	client, err := psftp.Dial(ctx, net.JoinHostPort(ip, strconv.Itoa(f.Port)), f.User, f.Password, f.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.DisableSELFDecryption(ctx); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("configure raw FTP transfers: %w", err)
+	}
+	return client, nil
 }
 
 func (f *FTP) Detect(ctx context.Context, ip string) (bool, int, error) {

@@ -129,6 +129,31 @@ func TestVerifyTransferSize(t *testing.T) {
 	}
 }
 
+func TestUploadGameDisablesSELFSizeView(t *testing.T) {
+	server := newDownloadFTPServer(t, nil, true, 0)
+	server.dynamicSize = true
+	server.selfMode = true
+	server.selfReportedSize = 7
+	defer server.Close()
+
+	localPath := filepath.Join(t.TempDir(), "eboot.bin")
+	want := []byte("complete signed executable data")
+	if err := os.WriteFile(localPath, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := Service{
+		Port:                  server.Port(),
+		User:                  "anonymous",
+		Timeout:               time.Second,
+		DisableSELFDecryption: true,
+	}
+	game := domain.Game{Title: "Test game", LocalPath: localPath}
+	if err := service.UploadGame(context.Background(), "127.0.0.1", game, "/games", nil); err != nil {
+		t.Fatalf("upload raw SELF: %v", err)
+	}
+	server.assertUpload(t, want, []int64{0}, 1)
+}
+
 func TestNamesFallsBackToCWDForPS4FTPServers(t *testing.T) {
 	server := newDownloadFTPServer(t, nil, true, 0)
 	server.names = []string{"CUSA00001", "CUSA00002"}
@@ -181,18 +206,23 @@ func assertFileContents(t *testing.T, path, want string) {
 }
 
 type downloadFTPServer struct {
-	listener       net.Listener
-	payload        []byte
-	resume         bool
-	interruptAfter int
-	reportedSize   int
-	wg             sync.WaitGroup
-	mu             sync.Mutex
-	restOffsets    []int64
-	retrOffsets    []int64
-	names          []string
-	rejectNLSTPath bool
-	disableNLST    bool
+	listener         net.Listener
+	payload          []byte
+	resume           bool
+	interruptAfter   int
+	reportedSize     int
+	wg               sync.WaitGroup
+	mu               sync.Mutex
+	restOffsets      []int64
+	retrOffsets      []int64
+	names            []string
+	rejectNLSTPath   bool
+	disableNLST      bool
+	dynamicSize      bool
+	selfMode         bool
+	selfReportedSize int
+	selfCommands     int
+	storOffsets      []int64
 }
 
 func newDownloadFTPServer(t *testing.T, payload []byte, resume bool, interruptAfter int) *downloadFTPServer {
@@ -225,6 +255,21 @@ func (s *downloadFTPServer) assertOffsets(t *testing.T, rest, retr []int64) {
 	}
 	if fmt.Sprint(s.retrOffsets) != fmt.Sprint(retr) {
 		t.Fatalf("RETR offsets = %v, want %v", s.retrOffsets, retr)
+	}
+}
+
+func (s *downloadFTPServer) assertUpload(t *testing.T, payload []byte, stor []int64, selfCommands int) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if string(s.payload) != string(payload) {
+		t.Fatalf("uploaded payload = %q, want %q", s.payload, payload)
+	}
+	if fmt.Sprint(s.storOffsets) != fmt.Sprint(stor) {
+		t.Fatalf("STOR offsets = %v, want %v", s.storOffsets, stor)
+	}
+	if s.selfCommands != selfCommands {
+		t.Fatalf("SELF commands = %d, want %d", s.selfCommands, selfCommands)
 	}
 }
 
@@ -272,7 +317,28 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 		case "TYPE":
 			respond(200, "binary mode")
 		case "SIZE":
-			respond(213, strconv.Itoa(s.reportedSize))
+			s.mu.Lock()
+			reportedSize := s.reportedSize
+			if s.dynamicSize {
+				if s.selfMode {
+					reportedSize = s.selfReportedSize
+				} else {
+					reportedSize = len(s.payload)
+				}
+			}
+			s.mu.Unlock()
+			respond(213, strconv.Itoa(reportedSize))
+		case "SELF":
+			s.mu.Lock()
+			s.selfMode = !s.selfMode
+			s.selfCommands++
+			enabled := s.selfMode
+			s.mu.Unlock()
+			if enabled {
+				respond(226, "SELF transfer mode enabled")
+			} else {
+				respond(226, "SELF transfer mode disabled")
+			}
 		case "REST":
 			requested, _ := strconv.ParseInt(argument, 10, 64)
 			s.mu.Lock()
@@ -360,6 +426,32 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 			} else {
 				respond(226, "transfer complete")
 			}
+		case "STOR":
+			s.mu.Lock()
+			s.storOffsets = append(s.storOffsets, offset)
+			s.mu.Unlock()
+			respond(150, "opening data connection")
+			dataConn, err := dataListener.Accept()
+			if err != nil {
+				return
+			}
+			stored, err := io.ReadAll(dataConn)
+			_ = dataConn.Close()
+			_ = dataListener.Close()
+			dataListener = nil
+			if err != nil {
+				respond(426, "transfer interrupted")
+				continue
+			}
+			s.mu.Lock()
+			end := int(offset) + len(stored)
+			payload := make([]byte, end)
+			copy(payload, s.payload)
+			copy(payload[int(offset):], stored)
+			s.payload = payload
+			s.mu.Unlock()
+			offset = 0
+			respond(226, "transfer complete")
 		case "QUIT":
 			respond(221, "goodbye")
 			return

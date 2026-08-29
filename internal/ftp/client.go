@@ -83,6 +83,40 @@ func (c *Client) Noop(ctx context.Context) error {
 	return nil
 }
 
+// DisableSELFDecryption switches compatible PS4/PS5 ftpsrv payloads to raw
+// file transfers. Those servers enable SELF-to-ELF conversion by default and
+// otherwise report the converted size for signed executables such as
+// eboot.bin, which is not the number of bytes stored on disk.
+//
+// SELF is a non-standard command, so a rejection means the server does not
+// expose the feature and is safe to ignore.
+func (c *Client) DisableSELFDecryption(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	code, message, err := c.command(ctx, "SELF")
+	if err != nil {
+		return err
+	}
+	if code < 200 || code >= 300 {
+		return nil
+	}
+	if !strings.Contains(strings.ToLower(message), "enabled") {
+		return nil
+	}
+
+	// The command toggles rather than sets the mode. If a server happened to
+	// start with conversion disabled, the first command enabled it; toggle it
+	// back off and require a successful response.
+	code, message, err = c.command(ctx, "SELF")
+	if err != nil {
+		return err
+	}
+	if code < 200 || code >= 300 {
+		return fmt.Errorf("disable FTP SELF transfer mode: %d %s", code, message)
+	}
+	return nil
+}
+
 func (c *Client) Names(ctx context.Context, remotePath string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
