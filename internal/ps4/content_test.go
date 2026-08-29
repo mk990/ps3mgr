@@ -28,6 +28,9 @@ func TestContentServerUsesOpaqueURLsAndSupportsRanges(t *testing.T) {
 	}
 	defer cleanup()
 	parsed, _ := url.Parse(urls[0])
+	if !strings.HasSuffix(parsed.Path, "/part-000.pkg") || strings.Contains(parsed.Path, "Game Part") {
+		t.Fatalf("RPI URL is not parser-safe: %s", parsed.Path)
+	}
 	request := httptest.NewRequest(http.MethodGet, parsed.RequestURI(), nil)
 	request.Header.Set("Range", "bytes=2-5")
 	recorder := httptest.NewRecorder()

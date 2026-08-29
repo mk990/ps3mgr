@@ -13,7 +13,7 @@ func TestLoadDefaultsAndEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PS3GameDir != "." || cfg.Listen != "127.0.0.1:8080" || cfg.RemoteGameDir != "/dev_hdd0/GAMES" || cfg.PS4GameDir != "./ps4-games" || cfg.PS4RemoteGameDir != "/data/games" || cfg.PS4RPIPort != 12800 || cfg.PS4PKGListen != "0.0.0.0:8081" || cfg.PS4AdvertiseURL != "" || cfg.PS4RPITimeout != 15*time.Second || cfg.PS5GameDir != "./ps5-games" || cfg.PS5RemoteGameDir != "/data/etaHEN/games" || cfg.PS5FTPPort != 2121 || cfg.ScanTimeout != 500*time.Millisecond || !cfg.PS2CoverDownload {
+	if cfg.PS3GameDir != "." || cfg.Listen != "127.0.0.1:8080" || cfg.RemoteGameDir != "/dev_hdd0/GAMES" || cfg.PS4GameDir != "./ps4-games" || cfg.PS4RemoteGameDir != "/user/app" || cfg.PS4RPIPort != 12800 || cfg.PS4PKGListen != "0.0.0.0:8081" || cfg.PS4AdvertiseURL != "" || cfg.PS4RPITimeout != 15*time.Second || cfg.PS5GameDir != "./ps5-games" || cfg.PS5RemoteGameDir != "/data/etaHEN/games" || cfg.PS5FTPPort != 2121 || cfg.ScanTimeout != 500*time.Millisecond || !cfg.PS2CoverDownload {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	t.Setenv("PS3MGR_GAME_DIR", "/legacy-must-be-ignored")

@@ -42,7 +42,7 @@ func Load() (Config, error) {
 		PS2USBRoot:       env("PS3MGR_PS2_USB_MOUNT_ROOT", "/mnt/usb"),
 		PS2CoverDownload: true,
 		PS4GameDir:       env("PS3MGR_PS4_GAME_DIR", "./ps4-games"),
-		PS4RemoteGameDir: env("PS3MGR_PS4_REMOTE_GAME_DIR", "/data/games"),
+		PS4RemoteGameDir: env("PS3MGR_PS4_REMOTE_GAME_DIR", "/user/app"),
 		PS4RPIPort:       12800,
 		PS4PKGListen:     env("PS3MGR_PS4_PKG_LISTEN", "0.0.0.0:8081"),
 		PS4AdvertiseURL:  env("PS3MGR_PS4_ADVERTISE_URL", ""),

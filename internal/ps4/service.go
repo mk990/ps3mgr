@@ -151,9 +151,18 @@ func dlcDownloadName(baseName string, index int) string {
 }
 
 func (s *Service) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error) {
-	names, err := s.FTP.Names(ctx, ip, s.FTP.RemoteRoot)
+	remoteRoot := s.FTP.RemoteRoot
+	names, err := s.FTP.Names(ctx, ip, remoteRoot)
+	if err != nil && path.Clean(remoteRoot) != "/user/app" {
+		// Older releases defaulted this setting to /data/games, which is a
+		// staging location rather than the PS4's installed application tree.
+		// Preserve explicit/custom roots when they work, but recover cleanly
+		// from the legacy default on a normal GoldHEN filesystem.
+		remoteRoot = "/user/app"
+		names, err = s.FTP.Names(ctx, ip, remoteRoot)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("list remote PS4 games: %w", err)
+		return nil, fmt.Errorf("list remote PS4 games in %s: %w", remoteRoot, err)
 	}
 	s.mu.RLock()
 	local := copyPackages(s.local)
@@ -163,7 +172,7 @@ func (s *Service) RemoteGames(ctx context.Context, ip string) ([]domain.Game, er
 		item := domain.Game{
 			ID:         strings.ToUpper(titleIDPattern.FindString(name)),
 			Title:      name,
-			RemotePath: path.Join(s.FTP.RemoteRoot, name),
+			RemotePath: path.Join(remoteRoot, name),
 			Installed:  true,
 			State:      domain.StateInstalled,
 		}

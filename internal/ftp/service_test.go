@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -128,6 +129,26 @@ func TestVerifyTransferSize(t *testing.T) {
 	}
 }
 
+func TestNamesFallsBackToCWDForPS4FTPServers(t *testing.T) {
+	server := newDownloadFTPServer(t, nil, true, 0)
+	server.names = []string{"CUSA00001", "CUSA00002"}
+	server.rejectNLSTPath = true
+	defer server.Close()
+
+	client, err := Dial(context.Background(), net.JoinHostPort("127.0.0.1", server.Port()), "anonymous", "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	names, err := client.Names(context.Background(), "/user/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(names) != "[CUSA00001 CUSA00002]" {
+		t.Fatalf("names = %v", names)
+	}
+}
+
 func assertFileContents(t *testing.T, path, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -149,6 +170,8 @@ type downloadFTPServer struct {
 	mu             sync.Mutex
 	restOffsets    []int64
 	retrOffsets    []int64
+	names          []string
+	rejectNLSTPath bool
 }
 
 func newDownloadFTPServer(t *testing.T, payload []byte, resume bool, interruptAfter int) *downloadFTPServer {
@@ -249,6 +272,29 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 			}
 			port := dataListener.Addr().(*net.TCPAddr).Port
 			respond(229, fmt.Sprintf("Entering Extended Passive Mode (|||%d|)", port))
+		case "CWD":
+			if argument == "/user/app" {
+				respond(250, "directory changed")
+			} else {
+				respond(550, "directory unavailable")
+			}
+		case "NLST":
+			if s.rejectNLSTPath && argument != "" {
+				respond(550, "path argument unsupported")
+				_ = dataListener.Close()
+				dataListener = nil
+				continue
+			}
+			respond(150, "opening data connection")
+			dataConn, err := dataListener.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(dataConn, strings.Join(s.names, "\r\n")+"\r\n")
+			_ = dataConn.Close()
+			_ = dataListener.Close()
+			dataListener = nil
+			respond(226, "transfer complete")
 		case "RETR":
 			s.mu.Lock()
 			s.retrOffsets = append(s.retrOffsets, offset)

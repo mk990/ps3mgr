@@ -85,8 +85,30 @@ func (c *Client) Noop(ctx context.Context) error {
 func (c *Client) Names(ctx context.Context, remotePath string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	names, err := c.names(ctx, "NLST "+cleanPath(remotePath))
+	if err == nil {
+		return names, nil
+	}
+	// Several PS4 FTP payloads implement NLST but reject its optional path
+	// argument. Change into the directory and retry the command without an
+	// argument for compatibility with those servers.
+	code, message, cwdErr := c.command(ctx, "CWD "+cleanPath(remotePath))
+	if cwdErr != nil {
+		return nil, fmt.Errorf("%w; FTP CWD failed: %v", err, cwdErr)
+	}
+	if code != 250 {
+		return nil, fmt.Errorf("%w; FTP CWD failed: %d %s", err, code, message)
+	}
+	names, fallbackErr := c.names(ctx, "NLST")
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("%w; FTP NLST after CWD failed: %v", err, fallbackErr)
+	}
+	return names, nil
+}
+
+func (c *Client) names(ctx context.Context, command string) ([]string, error) {
 	var data bytes.Buffer
-	if err := c.dataCommand(ctx, "NLST "+cleanPath(remotePath), &data, nil); err != nil {
+	if err := c.dataCommand(ctx, command, &data, nil); err != nil {
 		return nil, err
 	}
 	var names []string

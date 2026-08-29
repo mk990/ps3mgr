@@ -113,7 +113,7 @@ func (s *ContentServer) Register(pkg Package) ([]string, func(), error) {
 	}
 	tokens := make([]string, 0, len(pkg.Parts))
 	urls := make([]string, 0, len(pkg.Parts))
-	for _, part := range registered {
+	for index, part := range registered {
 		token, err := randomToken()
 		if err != nil {
 			return nil, nil, err
@@ -122,7 +122,11 @@ func (s *ContentServer) Register(pkg Package) ([]string, func(), error) {
 		s.files[token] = part
 		s.mu.Unlock()
 		tokens = append(tokens, token)
-		urls = append(urls, s.AdvertiseURL+"/ps4-pkg/"+token+"/"+url.PathEscape(part.name))
+		// RPI runs URLs through the PS4 URI parser before it downloads them.
+		// Keep the temporary route ASCII-only and short; the opaque token is the
+		// authorization, while ServeContent can retain the real package name.
+		urlName := fmt.Sprintf("part-%03d.pkg", index)
+		urls = append(urls, s.AdvertiseURL+"/ps4-pkg/"+token+"/"+urlName)
 	}
 	cleanup := func() {
 		s.mu.Lock()
@@ -176,14 +180,14 @@ func (s *ContentServer) Handler() http.Handler {
 			return
 		}
 		name, err := url.PathUnescape(parts[1])
-		if err != nil {
+		if err != nil || !strings.HasSuffix(strings.ToLower(name), ".pkg") {
 			http.NotFound(w, r)
 			return
 		}
 		s.mu.RLock()
 		served, ok := s.files[parts[0]]
 		s.mu.RUnlock()
-		if !ok || name != served.name {
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}

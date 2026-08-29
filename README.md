@@ -208,7 +208,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_PS2_USB_MOUNT_ROOT` | `/mnt/usb` | Parent containing discovered mounted USB directories |
 | `PS3MGR_PS2_COVER_DOWNLOAD` | `true` | Download only missing known-serial covers and cache them locally |
 | `PS3MGR_PS4_GAME_DIR` | `./ps4-games` | Recursive local PS4 `.pkg` library |
-| `PS3MGR_PS4_REMOTE_GAME_DIR` | `/data/games` | PS4 FTP (port 2121) remote game directory used by `ps4 pull` |
+| `PS3MGR_PS4_REMOTE_GAME_DIR` | `/user/app` | PS4 FTP (port 2121) installed application directory used by `ps4 pull` |
 | `PS3MGR_PS4_RPI_PORT` | `12800` | flatZ Remote Package Installer API port on the PS4 |
 | `PS3MGR_PS4_PKG_LISTEN` | `0.0.0.0:8081` | Local HTTP listener used to stream PKGs to the PS4 |
 | `PS3MGR_PS4_ADVERTISE_URL` | empty | Required for installs; HTTP URL with the manager host's LAN IP and package port |
@@ -253,7 +253,7 @@ PS4 installation does not upload the package to the console. The manager starts 
 
 `PS3MGR_PS4_PKG_LISTEN` is where the manager binds locally. `PS3MGR_PS4_ADVERTISE_URL` is the address sent to the PS4. For example, with a manager host at `192.168.1.20`, use `0.0.0.0:8081` for the listener and `http://192.168.1.20:8081` for the advertised URL. Allow TCP 8081 through the host firewall and publish that port from Docker. No external CDN, JavaScript, CSS, or image resource is used by the web panel.
 
-PS4 pulls use FTP port 2121. Each selected `app.pkg` from `PS3MGR_PS4_REMOTE_GAME_DIR` is copied directly into the local PS4 library as `<title> - <CUSA>.pkg`, without a containing game directory. Update packages found below `/user/patch/<CUSA>` are saved beside it as `<title> - <CUSA>.patch.pkg`, followed by `.patch01.pkg`, `.patch02.pkg`, and so on when more than one update PKG exists. DLC packages found at `/user/addcont/<CUSA>/*/ac.pkg` are saved as `<title> - <CUSA>.DLC.pkg`, then `.DLC01.pkg`, `.DLC02.pkg`, and so on.
+PS4 pulls use FTP port 2121. Installed base applications are normally discovered below `/user/app`; if a legacy configuration still points at an unavailable directory, discovery falls back to `/user/app`. Each selected `app.pkg` is copied directly into the local PS4 library as `<title> - <CUSA>.pkg`, without a containing game directory. Update packages found below `/user/patch/<CUSA>` are saved beside it as `<title> - <CUSA>.patch.pkg`, followed by `.patch01.pkg`, `.patch02.pkg`, and so on when more than one update PKG exists. DLC packages found at `/user/addcont/<CUSA>/*/ac.pkg` are saved as `<title> - <CUSA>.DLC.pkg`, then `.DLC01.pkg`, `.DLC02.pkg`, and so on.
 
 ## PS2 / Open PS2 Loader behavior
 
