@@ -60,3 +60,29 @@ func TestRPIClientOfficialProtocolAndHexProgress(t *testing.T) {
 		t.Fatalf("progress: %+v err=%v", progress, err)
 	}
 }
+
+// local_copy_percent reports 100 for the entire lifetime of a real RPI task,
+// including immediately after registration and mid-transfer, so it must
+// never be treated as a completion signal on its own.
+func TestRPIClientProgressIgnoresLocalCopyPercent(t *testing.T) {
+	responses := []string{
+		`{ "status": "success", "bits": 0x0, "error": 0, "length": 0x0, "transferred": 0x0, "length_total": 0x0, "transferred_total": 0x0, "local_copy_percent": 100 }`,
+		`{ "status": "success", "bits": 0x0, "error": 0, "length": 0x100, "transferred": 0x40, "length_total": 0x100, "transferred_total": 0x40, "local_copy_percent": 100 }`,
+	}
+	call := 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		response := responses[call]
+		call++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewBufferString(response)), Header: make(http.Header)}, nil
+	})
+	client := &RPIClient{Port: DefaultRPIPort, Client: &http.Client{Transport: transport}}
+	for i := range responses {
+		progress, err := client.Progress(context.Background(), "192.168.1.4", 1)
+		if err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+		if progress.Complete {
+			t.Fatalf("progress %d falsely reported complete: %+v", i, progress)
+		}
+	}
+}

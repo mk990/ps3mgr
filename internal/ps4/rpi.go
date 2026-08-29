@@ -78,13 +78,10 @@ func (c *RPIClient) Progress(ctx context.Context, ip string, taskID int) (Instal
 	transferred := firstNumber(response, "transferred_total", "transferred")
 	total := firstNumber(response, "length_total", "length")
 	current := firstString(response, "current_file", "title")
+	// local_copy_percent reports 100 for the entire lifetime of a task
+	// regardless of actual transfer progress, so it cannot be used as a
+	// completion signal; transferred/total is the only reliable one.
 	complete := total > 0 && transferred >= total
-	if firstNumber(response, "local_copy_percent") >= 100 {
-		complete = true
-	}
-	if strings.EqualFold(firstString(response, "state", "task_state"), "completed") {
-		complete = true
-	}
 	return InstallProgress{Transferred: transferred, Total: total, CurrentFile: current, Complete: complete}, nil
 }
 
