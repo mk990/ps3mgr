@@ -217,7 +217,9 @@ func (c *Client) MakeDirAll(ctx context.Context, remotePath string) error {
 		if err != nil {
 			return err
 		}
-		if code != 257 && code != 250 && code != 550 {
+		// Some FTP payloads (observed on PS5) report MKD success with 226
+		// ("Directory created") instead of the standard 257.
+		if code != 257 && code != 250 && code != 226 && code != 550 {
 			return fmt.Errorf("create remote directory %s: %d %s", current, code, message)
 		}
 	}
