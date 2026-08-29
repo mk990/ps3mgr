@@ -74,6 +74,40 @@ func TestHealthLibraryAndValidation(t *testing.T) {
 	}
 }
 
+func TestMutatingAPIsRejectCrossOriginBrowserRequests(t *testing.T) {
+	application := app.New(config.Config{
+		PS3GameDir:    t.TempDir(),
+		PS2GameDir:    t.TempDir(),
+		PS2SystemDir:  t.TempDir(),
+		PS2USBRoot:    t.TempDir(),
+		PS4GameDir:    t.TempDir(),
+		PS5GameDir:    t.TempDir(),
+		RemoteGameDir: "/dev_hdd0/GAMES",
+		FTPTimeout:    time.Second,
+		Workers:       1,
+	})
+	defer application.Close(context.Background())
+	handler := New(application).Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "http://manager.local/api/scan", strings.NewReader(`{"cidr":"192.168.1.0/24"}`))
+	request.Header.Set("Origin", "http://attacker.example")
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://manager.local/api/consoles", strings.NewReader(`{"ip":"127.0.0.1"}`))
+	request.Header.Set("Origin", "http://manager.local")
+	response = httptest.NewRecorder()
+	application.Scanner.Detector = webDetector{}
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("same-origin POST status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestPS2APIsUseDiscoveredTargetIDs(t *testing.T) {
 	ps3Root, ps2Root, systemRoot, usbRoot := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(ps3Root, "Game"), 0755); err != nil {

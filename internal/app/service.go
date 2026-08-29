@@ -251,11 +251,11 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 	return s.Transfers.Enqueue(selected, consoleIP, transfers.Options{StopOnError: stopOnError})
 }
 
-func (s *Service) EnqueuePull(consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
+func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {
 	if _, err := s.EnsureConsole(consoleIP); err != nil {
 		return nil, err
 	}
-	remote, err := s.RemoteGames(context.Background(), consoleIP, "")
+	remote, err := s.RemoteGames(ctx, consoleIP, "")
 	if err != nil {
 		return nil, err
 	}

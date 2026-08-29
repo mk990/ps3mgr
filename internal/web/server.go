@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -42,8 +43,29 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		if isUnsafeMethod(r.Method) && !isSameOrigin(r) {
+			writeError(w, http.StatusForbidden, fmt.Errorf("cross-origin requests are not allowed"))
+			return
+		}
 		s.mux.ServeHTTP(w, r)
 	})
+}
+
+func isUnsafeMethod(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+}
+
+func isSameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Non-browser clients generally omit Origin and remain supported.
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 func (s *Server) routes() {
@@ -732,7 +754,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	items, err := s.app.EnqueuePull(request.ConsoleID, request.GameIDs, request.StopOnError)
+	items, err := s.app.EnqueuePull(r.Context(), request.ConsoleID, request.GameIDs, request.StopOnError)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

@@ -139,7 +139,7 @@ func (r Runner) pull(ctx context.Context, application *app.Service, args []strin
 	if *ip == "" || set.NArg() == 0 {
 		return fmt.Errorf("--ip and at least one game are required")
 	}
-	items, err := application.EnqueuePull(*ip, set.Args(), *stopOnError)
+	items, err := application.EnqueuePull(ctx, *ip, set.Args(), *stopOnError)
 	if err != nil {
 		return err
 	}
