@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"testing"
 )
 
@@ -51,14 +49,10 @@ func TestRPIClientOfficialProtocolAndHexProgress(t *testing.T) {
 	if err != nil || taskID != 42 || len(installURLs) != 2 {
 		t.Fatalf("install: task=%d urls=%v err=%v", taskID, installURLs, err)
 	}
-	for index, encoded := range installURLs {
-		if !strings.HasPrefix(encoded, "http%3A%2F%2F") {
-			t.Fatalf("package URL was not encoded for RPI: %q", encoded)
-		}
-		decoded, decodeErr := url.QueryUnescape(encoded)
-		want := []string{"http://host/part0.pkg", "http://host/part1.pkg"}[index]
-		if decodeErr != nil || decoded != want {
-			t.Fatalf("decoded package URL = %q, want %q (error %v)", decoded, want, decodeErr)
+	want := []string{"http://host/part0.pkg", "http://host/part1.pkg"}
+	for index, got := range installURLs {
+		if got != want[index] {
+			t.Fatalf("package URL = %q, want %q (RPI expects plain unescaped URLs)", got, want[index])
 		}
 	}
 	progress, err := client.Progress(context.Background(), "192.168.1.4", taskID)

@@ -50,20 +50,14 @@ func (c *RPIClient) Install(ctx context.Context, ip string, packageURLs []string
 	if len(packageURLs) == 0 {
 		return 0, fmt.Errorf("package URL list is empty")
 	}
-	encodedURLs := make([]string, len(packageURLs))
 	for index, packageURL := range packageURLs {
 		parsed, err := url.Parse(packageURL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
 			return 0, fmt.Errorf("invalid package URL at index %d", index)
 		}
-		// flatZ RPI calls sceHttpUriUnescape on each array element before it
-		// validates the http(s) prefix and downloads the package. Supplying a
-		// fully escaped element avoids firmware-specific URI-unescape behavior;
-		// RPI restores this to the original URL internally.
-		encodedURLs[index] = url.QueryEscape(packageURL)
 	}
 	var response map[string]any
-	if _, err := c.post(ctx, ip, "/api/install", map[string]any{"type": "direct", "packages": encodedURLs}, &response); err != nil {
+	if _, err := c.post(ctx, ip, "/api/install", map[string]any{"type": "direct", "packages": packageURLs}, &response); err != nil {
 		return 0, err
 	}
 	taskID := int(number(response["task_id"]))
