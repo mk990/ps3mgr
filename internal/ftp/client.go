@@ -280,6 +280,9 @@ func (c *Client) Store(ctx context.Context, remotePath string, source io.Reader,
 			}
 			n, readErr := source.Read(buffer)
 			if n > 0 {
+				if err := setDeadline(ctx, conn, c.timeout); err != nil {
+					return err
+				}
 				if err := writeAll(conn, buffer[:n]); err != nil {
 					return err
 				}
@@ -335,6 +338,9 @@ func (c *Client) RetrieveFrom(ctx context.Context, remotePath string, destinatio
 	buffer := make([]byte, 256*1024)
 	for {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := setDeadline(ctx, dataConn, c.timeout); err != nil {
 			return err
 		}
 		n, readErr := dataConn.Read(buffer)

@@ -50,6 +50,7 @@ type Manager struct {
 	sequence    atomic.Uint64
 	platform    domain.Platform
 	eventPrefix string
+	direction   domain.TransferDirection
 }
 
 func New(uploader Uploader, publisher Publisher, remoteRoot string) *Manager {
@@ -64,6 +65,7 @@ func NewDownload(downloader Downloader, publisher Publisher, localRoot string, p
 	m := newManager(nil, publisher, "", platform, string(platform)+".pull")
 	m.downloader = downloader
 	m.localRoot = localRoot
+	m.direction = domain.TransferDownload
 	return m
 }
 
@@ -73,7 +75,7 @@ func newManager(uploader Uploader, publisher Publisher, remoteRoot string, platf
 		uploader: uploader, events: publisher, remoteRoot: remoteRoot,
 		items: make(map[string]*domain.Transfer), stopOnError: make(map[string]bool),
 		rootCtx: ctx, rootStop: cancel, done: make(chan struct{}),
-		platform: platform, eventPrefix: eventPrefix,
+		platform: platform, eventPrefix: eventPrefix, direction: domain.TransferUpload,
 	}
 	m.cond = sync.NewCond(&m.mu)
 	go m.run()
@@ -96,7 +98,7 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 	for _, game := range games {
 		item := &domain.Transfer{
 			ID: m.id("transfer"), QueueID: queueID, ConsoleIP: consoleIP,
-			Game: game, Platform: m.platform, State: domain.QueueWaiting, TotalBytes: game.Size, CreatedAt: now,
+			Game: game, Platform: m.platform, Direction: m.direction, State: domain.QueueWaiting, TotalBytes: game.Size, CreatedAt: now,
 		}
 		m.items[item.ID] = item
 		m.order = append(m.order, item.ID)
@@ -275,6 +277,8 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 	m.update(item.ID, func(value *domain.Transfer) { value.State = domain.QueueTransferring })
 	started := time.Now()
 	var lastProgressEvent time.Time
+	dynamicTotal := item.TotalBytes <= 0
+	fileTotals := make(map[string]int64)
 	progressFn := func(progress ps3ftp.Progress) {
 		m.mu.Lock()
 		value := m.items[item.ID]
@@ -283,6 +287,15 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 			return
 		}
 		value.CurrentFile = progress.File
+		if dynamicTotal && progress.Total > 0 {
+			key := progress.Key
+			if key == "" {
+				key = progress.File
+			}
+			previous := fileTotals[key]
+			fileTotals[key] = progress.Total
+			value.TotalBytes += progress.Total - previous
+		}
 		value.BytesTransferred += progress.Delta
 		if value.TotalBytes > 0 && value.BytesTransferred > value.TotalBytes {
 			value.BytesTransferred = value.TotalBytes
@@ -335,7 +348,11 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 	m.update(item.ID, func(value *domain.Transfer) {
 		value.State = domain.QueueVerifying
 		value.Percentage = 100
-		value.BytesTransferred = value.TotalBytes
+		if value.TotalBytes <= 0 {
+			value.TotalBytes = value.BytesTransferred
+		} else {
+			value.BytesTransferred = value.TotalBytes
+		}
 	})
 	// FTP size checks happen per file during resumable transfers; reaching this point verifies every file completed.
 	m.update(item.ID, func(value *domain.Transfer) {

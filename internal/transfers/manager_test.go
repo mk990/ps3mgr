@@ -50,6 +50,31 @@ type discardPublisher struct{}
 
 func (discardPublisher) Publish(string, any) {}
 
+type fakeDownloader struct{}
+
+func (fakeDownloader) DownloadGame(_ context.Context, _ string, _ domain.Game, _ string, progress func(ps3ftp.Progress)) error {
+	progress(ps3ftp.Progress{File: "app.pkg", Total: 1024})
+	progress(ps3ftp.Progress{File: "app.pkg", Delta: 1024, Total: 1024})
+	return nil
+}
+
+func TestDownloadManagerDiscoversRemoteTotalAndDirection(t *testing.T) {
+	manager := NewDownload(fakeDownloader{}, discardPublisher{}, t.TempDir(), domain.PlatformPS4)
+	defer closeManager(t, manager)
+	created, err := manager.Enqueue([]domain.Game{{Title: "Remote game"}}, "127.0.0.1", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created[0].Direction != domain.TransferDownload {
+		t.Fatalf("created direction = %q", created[0].Direction)
+	}
+	waitState(t, manager, created[0].ID, domain.QueueCompleted)
+	item, _ := manager.Get(created[0].ID)
+	if item.TotalBytes != 1024 || item.BytesTransferred != 1024 || item.Percentage != 100 {
+		t.Fatalf("completed pull progress = %+v", item)
+	}
+}
+
 func TestManagerIsSequentialAndContinuesAfterFailure(t *testing.T) {
 	uploader := &fakeUploader{fail: map[string]int{"first": 1}, wait: map[string]bool{}}
 	manager := New(uploader, discardPublisher{}, "/games")

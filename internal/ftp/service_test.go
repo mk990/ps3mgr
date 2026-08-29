@@ -86,7 +86,7 @@ func TestDownloadFileRestartsWhenResumeUnsupported(t *testing.T) {
 }
 
 func TestDownloadFilePreservesPartAfterInterruption(t *testing.T) {
-	server := newDownloadFTPServer(t, []byte("hello world"), true, 2)
+	server := newDownloadFTPServer(t, []byte("hello world!!!"), true, 2)
 	defer server.Close()
 
 	localPath := filepath.Join(t.TempDir(), "game.bin")
@@ -97,10 +97,32 @@ func TestDownloadFilePreservesPartAfterInterruption(t *testing.T) {
 	if err := service.DownloadFile(context.Background(), "127.0.0.1", "/game.bin", localPath, nil); err == nil {
 		t.Fatal("interrupted download unexpectedly succeeded")
 	}
-	assertFileContents(t, localPath+".part", "hello wo")
+	assertFileContents(t, localPath+".part", "hello world!")
 	if _, err := os.Stat(localPath); !os.IsNotExist(err) {
 		t.Fatalf("finished path exists after interrupted download: %v", err)
 	}
+}
+
+func TestDownloadFileRetriesAndResumesInterruption(t *testing.T) {
+	server := newDownloadFTPServer(t, []byte("hello world"), true, 2)
+	defer server.Close()
+
+	localPath := filepath.Join(t.TempDir(), "game.bin")
+	if err := os.WriteFile(localPath+".part", []byte("hello "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var transferred int64
+	service := Service{Port: server.Port(), User: "anonymous", Timeout: time.Second}
+	if err := service.DownloadFile(context.Background(), "127.0.0.1", "/game.bin", localPath, func(progress Progress) {
+		transferred += progress.Delta
+	}); err != nil {
+		t.Fatalf("retry interrupted download: %v", err)
+	}
+	assertFileContents(t, localPath, "hello world")
+	if transferred != 11 {
+		t.Fatalf("reported transferred bytes = %d, want 11", transferred)
+	}
+	server.assertOffsets(t, []int64{6, 8, 10}, []int64{6, 8, 10})
 }
 
 func TestDownloadFileRejectsSizeMismatch(t *testing.T) {

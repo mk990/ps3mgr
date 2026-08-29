@@ -302,6 +302,25 @@ func TestGameCardsUseWholeCardSelection(t *testing.T) {
 	}
 }
 
+func TestConsolePullsAppearInPlatformQueues(t *testing.T) {
+	script, err := assets.ReadFile("webui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(script)
+	for _, required := range []string{
+		"/api/ps4/pull-queue",
+		"item.direction==='download'",
+		"transferAmount(item)",
+		".pull.${suffix}",
+		"showView(queueView)",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("pull progress UI is missing %q", required)
+		}
+	}
+}
+
 func TestDesktopSidebarKeepsPS5NavigationReachable(t *testing.T) {
 	markup, err := assets.ReadFile("webui/index.html")
 	if err != nil {

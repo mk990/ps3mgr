@@ -43,6 +43,13 @@ type Console struct {
 
 type QueueState string
 
+type TransferDirection string
+
+const (
+	TransferUpload   TransferDirection = "upload"
+	TransferDownload TransferDirection = "download"
+)
+
 const (
 	QueueWaiting      QueueState = "WAITING"
 	QueueStarting     QueueState = "STARTING"
@@ -54,24 +61,25 @@ const (
 )
 
 type Transfer struct {
-	ID               string     `json:"id"`
-	QueueID          string     `json:"queue_id"`
-	Platform         Platform   `json:"platform,omitempty"`
-	ConsoleIP        string     `json:"console_ip"`
-	Game             Game       `json:"game"`
-	State            QueueState `json:"state"`
-	CurrentFile      string     `json:"current_file,omitempty"`
-	BytesTransferred int64      `json:"bytes_transferred"`
-	TotalBytes       int64      `json:"total_bytes"`
-	Percentage       float64    `json:"percentage"`
-	Speed            int64      `json:"speed"`
-	ETASeconds       int64      `json:"eta_seconds"`
-	ElapsedSeconds   int64      `json:"elapsed_seconds"`
-	Error            string     `json:"error,omitempty"`
-	Attempts         int        `json:"attempts"`
-	CreatedAt        time.Time  `json:"created_at"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
+	ID               string            `json:"id"`
+	QueueID          string            `json:"queue_id"`
+	Platform         Platform          `json:"platform,omitempty"`
+	Direction        TransferDirection `json:"direction"`
+	ConsoleIP        string            `json:"console_ip"`
+	Game             Game              `json:"game"`
+	State            QueueState        `json:"state"`
+	CurrentFile      string            `json:"current_file,omitempty"`
+	BytesTransferred int64             `json:"bytes_transferred"`
+	TotalBytes       int64             `json:"total_bytes"`
+	Percentage       float64           `json:"percentage"`
+	Speed            int64             `json:"speed"`
+	ETASeconds       int64             `json:"eta_seconds"`
+	ElapsedSeconds   int64             `json:"elapsed_seconds"`
+	Error            string            `json:"error,omitempty"`
+	Attempts         int               `json:"attempts"`
+	CreatedAt        time.Time         `json:"created_at"`
+	StartedAt        *time.Time        `json:"started_at,omitempty"`
+	FinishedAt       *time.Time        `json:"finished_at,omitempty"`
 }
 
 type Event struct {

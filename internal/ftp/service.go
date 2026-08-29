@@ -29,7 +29,9 @@ type Service struct {
 
 type Progress struct {
 	File  string
+	Key   string
 	Delta int64
+	Total int64
 }
 
 func (s *Service) connect(ctx context.Context, ip string) (*Client, error) {
@@ -248,6 +250,40 @@ func (s *Service) downloadTree(ctx context.Context, ip, remotePath, localPath st
 }
 
 func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
+	var lastErr error
+	var reported int64
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+		var attemptCompleted int64
+		err := s.downloadFileAttempt(ctx, ip, remotePath, localPath, func(value Progress) {
+			attemptCompleted += value.Delta
+			value.Delta = 0
+			if attemptCompleted > reported {
+				value.Delta = attemptCompleted - reported
+				reported = attemptCompleted
+			}
+			if progress != nil && (value.Delta > 0 || value.Total > 0) {
+				progress(value)
+			}
+		})
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+	}
+	return fmt.Errorf("download %s after retries: %w", filepath.Base(localPath), lastErr)
+}
+
+func (s *Service) downloadFileAttempt(ctx context.Context, ip, remotePath, localPath string, progress func(Progress)) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return err
 	}
@@ -267,10 +303,13 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 	if err == nil {
 		if remoteSize, sizeErr := client.Size(ctx, remotePath); sizeErr == nil {
 			expectedSize = remoteSize
+			if progress != nil {
+				progress(Progress{File: filepath.Base(localPath), Key: remotePath, Total: remoteSize})
+			}
 			switch {
 			case offset == remoteSize && offset > 0:
 				if progress != nil {
-					progress(Progress{File: filepath.Base(localPath), Delta: offset})
+					progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: offset, Total: expectedSize})
 				}
 				err = nil
 				goto completed
@@ -290,14 +329,14 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 		err = client.RetrieveFrom(ctx, remotePath, file, offset, func(delta int64) {
 			if progress != nil {
 				if !reportedOffset && offset > 0 {
-					progress(Progress{File: filepath.Base(localPath), Delta: offset})
+					progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: offset, Total: expectedSize})
 				}
-				progress(Progress{File: filepath.Base(localPath), Delta: delta})
+				progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: delta, Total: expectedSize})
 			}
 			reportedOffset = true
 		})
 		if err == nil && !reportedOffset && offset > 0 && progress != nil {
-			progress(Progress{File: filepath.Base(localPath), Delta: offset})
+			progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: offset, Total: expectedSize})
 		}
 		if errors.Is(err, ErrResumeUnsupported) {
 			client.Close()
@@ -315,7 +354,7 @@ func (s *Service) downloadFile(ctx context.Context, ip, remotePath, localPath st
 			if err == nil {
 				err = client.Retrieve(ctx, remotePath, file, func(delta int64) {
 					if progress != nil {
-						progress(Progress{File: filepath.Base(localPath), Delta: delta})
+						progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: delta, Total: expectedSize})
 					}
 				})
 			}
