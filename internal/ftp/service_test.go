@@ -149,6 +149,26 @@ func TestNamesFallsBackToCWDForPS4FTPServers(t *testing.T) {
 	}
 }
 
+func TestNamesFallsBackToLISTWhenNLSTUnsupported(t *testing.T) {
+	server := newDownloadFTPServer(t, nil, true, 0)
+	server.names = []string{"CUSA00001", "CUSA00002"}
+	server.disableNLST = true
+	defer server.Close()
+
+	client, err := Dial(context.Background(), net.JoinHostPort("127.0.0.1", server.Port()), "anonymous", "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	names, err := client.Names(context.Background(), "/user/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(names) != "[CUSA00001 CUSA00002]" {
+		t.Fatalf("names = %v", names)
+	}
+}
+
 func assertFileContents(t *testing.T, path, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -172,6 +192,7 @@ type downloadFTPServer struct {
 	retrOffsets    []int64
 	names          []string
 	rejectNLSTPath bool
+	disableNLST    bool
 }
 
 func newDownloadFTPServer(t *testing.T, payload []byte, resume bool, interruptAfter int) *downloadFTPServer {
@@ -279,6 +300,12 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 				respond(550, "directory unavailable")
 			}
 		case "NLST":
+			if s.disableNLST {
+				respond(502, "command not recognized")
+				_ = dataListener.Close()
+				dataListener = nil
+				continue
+			}
 			if s.rejectNLSTPath && argument != "" {
 				respond(550, "path argument unsupported")
 				_ = dataListener.Close()
@@ -291,6 +318,21 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 				return
 			}
 			_, _ = io.WriteString(dataConn, strings.Join(s.names, "\r\n")+"\r\n")
+			_ = dataConn.Close()
+			_ = dataListener.Close()
+			dataListener = nil
+			respond(226, "transfer complete")
+		case "LIST":
+			respond(150, "opening data connection")
+			dataConn, err := dataListener.Accept()
+			if err != nil {
+				return
+			}
+			lines := make([]string, len(s.names))
+			for i, name := range s.names {
+				lines[i] = fmt.Sprintf("-rwxr-xr-x 1 root root 4096 Jan 01 00:00 %s", name)
+			}
+			_, _ = io.WriteString(dataConn, strings.Join(lines, "\r\n")+"\r\n")
 			_ = dataConn.Close()
 			_ = dataListener.Close()
 			dataListener = nil

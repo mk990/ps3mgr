@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,7 +86,7 @@ func (c *Client) Noop(ctx context.Context) error {
 func (c *Client) Names(ctx context.Context, remotePath string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	names, err := c.names(ctx, "NLST "+cleanPath(remotePath))
+	names, err := c.names(ctx, "NLST "+cleanPath(remotePath), parseNLSTLine)
 	if err == nil {
 		return names, nil
 	}
@@ -99,27 +100,76 @@ func (c *Client) Names(ctx context.Context, remotePath string) ([]string, error)
 	if code != 250 {
 		return nil, fmt.Errorf("%w; FTP CWD failed: %d %s", err, code, message)
 	}
-	names, fallbackErr := c.names(ctx, "NLST")
-	if fallbackErr != nil {
-		return nil, fmt.Errorf("%w; FTP NLST after CWD failed: %v", err, fallbackErr)
+	names, nlstErr := c.names(ctx, "NLST", parseNLSTLine)
+	if nlstErr == nil {
+		return names, nil
+	}
+	// Some FTP payloads (observed on PS5) don't implement NLST at all and
+	// answer with 502 "command not recognized" regardless of arguments.
+	// LIST is effectively universal (it's what clients like FileZilla use
+	// for directory listings), so parse names out of it as a last resort.
+	names, listErr := c.names(ctx, "LIST", parseLISTLine)
+	if listErr != nil {
+		return nil, fmt.Errorf("%w; FTP NLST after CWD failed: %v; FTP LIST fallback failed: %v", err, nlstErr, listErr)
 	}
 	return names, nil
 }
 
-func (c *Client) names(ctx context.Context, command string) ([]string, error) {
+func (c *Client) names(ctx context.Context, command string, parse func(string) (string, bool)) ([]string, error) {
 	var data bytes.Buffer
 	if err := c.dataCommand(ctx, command, &data, nil); err != nil {
 		return nil, err
 	}
 	var names []string
 	for _, line := range strings.Split(strings.ReplaceAll(data.String(), "\r", ""), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "." || line == ".." {
+		name, ok := parse(line)
+		if !ok {
 			continue
 		}
-		names = append(names, path.Base(strings.TrimSuffix(line, "/")))
+		name = strings.TrimSpace(name)
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		names = append(names, path.Base(strings.TrimSuffix(name, "/")))
 	}
 	return names, nil
+}
+
+func parseNLSTLine(line string) (string, bool) {
+	return strings.TrimSpace(line), true
+}
+
+var (
+	unixListPattern = regexp.MustCompile(`^[-bcdlpsD][-rwxXsStT]{9}[+.@]?\s+\d+\s+\S+\s+\S+\s+\d+\s+\S+\s+\d+\s+[\d:]+\s+(.+)$`)
+	dosListPattern  = regexp.MustCompile(`(?i)^\d{2}-\d{2}-\d{2,4}\s+\d{2}:\d{2}(?:AM|PM)?\s+(?:<DIR>|\d+)\s+(.+)$`)
+)
+
+// parseLISTLine extracts the file name from a single line of a LIST
+// response. LIST has no standardized machine-readable format, so this
+// recognizes the common Unix ("ls -l") and DOS/IIS layouts and otherwise
+// falls back to the last whitespace-separated field.
+func parseLISTLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "total ") {
+		return "", false
+	}
+	var name string
+	switch {
+	case unixListPattern.MatchString(trimmed):
+		name = unixListPattern.FindStringSubmatch(trimmed)[1]
+	case dosListPattern.MatchString(trimmed):
+		name = dosListPattern.FindStringSubmatch(trimmed)[1]
+	default:
+		fields := strings.Fields(trimmed)
+		if len(fields) == 0 {
+			return "", false
+		}
+		name = fields[len(fields)-1]
+	}
+	if arrow := strings.Index(name, " -> "); arrow >= 0 {
+		name = name[:arrow]
+	}
+	return name, true
 }
 
 func (c *Client) ReadFile(ctx context.Context, remotePath string, limit int64) ([]byte, error) {
