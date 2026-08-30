@@ -62,6 +62,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps2/queue/{id}", s.ps2QueueItem)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/cancel", s.ps2Cancel)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/retry", s.ps2Retry)
+	s.mux.HandleFunc("GET /api/ps2/fpkg/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS2.FPKG.Status()) })
+	s.mux.HandleFunc("POST /api/ps2/fpkg/queue", s.ps2FPKGEnqueue)
+	s.mux.HandleFunc("GET /api/ps2/fpkg/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS2.FPKG.List()) })
+	s.mux.HandleFunc("GET /api/ps2/fpkg/queue/{id}", s.ps2FPKGQueueItem)
+	s.mux.HandleFunc("POST /api/ps2/fpkg/queue/{id}/cancel", s.ps2FPKGCancel)
+	s.mux.HandleFunc("POST /api/ps2/fpkg/queue/{id}/retry", s.ps2FPKGRetry)
 	s.mux.HandleFunc("GET /api/ps4/games", s.ps4Games)
 	s.mux.HandleFunc("GET /api/ps4/games/{id}/cover", s.ps4Cover)
 	s.mux.HandleFunc("GET /api/ps4/covers/status", func(w http.ResponseWriter, _ *http.Request) {

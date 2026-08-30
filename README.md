@@ -1,6 +1,6 @@
 # PlayStation Manager
 
-PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage, PS3 games through FTP, PS4 packages through flatZ Remote Package Installer, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
+PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage or PS4 fake-PKG conversion, PS3 games through FTP, PS4 packages through flatZ Remote Package Installer, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
 
 It replaces the external `bash`, `nmap`, `timeout`, and `lftp` dependencies used by `ps3-games.sh`. The executable contains its FTP client, network scanner, HTTP API, SSE event stream, and web interface.
 
@@ -16,6 +16,7 @@ export PS3MGR_PS2_GAME_DIR=/data/ps2
 export PS3MGR_PS2_SYSTEM_DIR=/data/ps2/system
 export PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb
 export PS3MGR_PS2_COVER_DOWNLOAD=true
+export PS3MGR_PS2_FPKG_EMULATOR=/data/JakV2.pkg
 export PS3MGR_PS4_GAME_DIR=/data/ps4
 export PS3MGR_PS4_PKG_LISTEN=0.0.0.0:8081
 export PS3MGR_PS4_ADVERTISE_URL=http://192.168.1.20:8081
@@ -165,6 +166,9 @@ ps3mgr ps2 compare --usb usb0 [--json]
 ps3mgr ps2 install --usb usb0 "God of War" "Gran Turismo 4"
 ps3mgr ps2 install --usb usb0 --all
 ps3mgr ps2 queue [--json]
+ps3mgr ps2 fpkg-status [--json]
+ps3mgr ps2 fpkg "God of War"
+ps3mgr ps2 fpkg --all
 ps3mgr ps4 --help
 ps3mgr ps4 local-games [--dir /data/ps4] [--json]
 ps3mgr ps4 scan 192.168.1.0/24 [--workers 32] [--json]
@@ -207,6 +211,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_PS2_SYSTEM_DIR` | `./ps2-system` | Required OPL/system files copied to a selected USB target |
 | `PS3MGR_PS2_USB_MOUNT_ROOT` | `/mnt/usb` | Parent containing discovered mounted USB directories |
 | `PS3MGR_PS2_COVER_DOWNLOAD` | `true` | Download only missing known-serial covers and cache them locally |
+| `PS3MGR_PS2_FPKG_EMULATOR` | `./PS22PS4-GUI/bin/emulators/JakV2.pkg` (`/data/JakV2.pkg` in Docker) | User-supplied PS2 Classics emulator fake PKG used as the conversion template |
 | `PS3MGR_PS4_GAME_DIR` | `./ps4-games` | Recursive local PS4 `.pkg` library |
 | `PS3MGR_PS4_REMOTE_GAME_DIR` | `/user/app` | PS4 FTP (port 2121) installed application directory used by `ps4 pull` |
 | `PS3MGR_PS4_RPI_PORT` | `12800` | flatZ Remote Package Installer API port on the PS4 |
@@ -258,6 +263,34 @@ PS4 pulls use FTP port 2121. Installed base applications are normally discovered
 ## PS2 / Open PS2 Loader behavior
 
 The PS2 scanner accepts `.iso` case-insensitively and reads `SYSTEM.CNF` directly from ISO9660 images to identify serials including `SLUS`, `SLES`, `SCUS`, `SCES`, `SLPM`, `SLPS`, and related legitimate prefixes. Filename detection is a fallback; an unidentified ISO remains visible as `unknown` but cannot be installed until it has a reliable game ID.
+
+## PS2 to PS4 fake-PKG conversion
+
+The converter follows the open-source [Nazky/PS22PS4-GUI](https://github.com/Nazky/PS22PS4-GUI) template method, but performs every step natively in Go. There is no `orbis-pub-cmd`, `gengp4`, or `magick` executable, no GP4 intermediate file, and no Wine: `internal/orbis` implements the PS4 PKG and PFS formats directly, including AES-XTS encryption, HMAC block signing, PFSC containers, `param.sfo` parsing, and the artwork scaler.
+
+A conversion reads the user-supplied PS2 Classics emulator FPKG with the all-zero passcode, extracts its filesystem, streams the selected ISO in as `image/disc01.iso`, patches `CONTENT_ID`, `TITLE_ID`, `TITLE`, and the emulator configuration, renders the artwork, writes the finished package, and verifies the PS4 PKG magic before publishing it into `PS3MGR_PS4_GAME_DIR`. The ISO is never copied into a staging directory, so a conversion needs room for the output package only. Conversion jobs have their own cancellable queue on `/ps2-queue`; completed output becomes visible in the PS4 package library and can then be installed through Remote Package Installer.
+
+The repository does not redistribute an emulator package. Supply a template you are entitled to use, and point `PS3MGR_PS2_FPKG_EMULATOR` at it. In the container the default location is `/data/JakV2.pkg`:
+
+```text
+-v /data:/data
+/data/JakV2.pkg
+```
+
+The PS4 library must be writable while building—do not use the read-only `/data/ps4` bind shown for install-only deployments.
+
+Optional per-game files are loaded only from `PS3MGR_PS2_SYSTEM_DIR/fpkg`, keyed by the normalized serial:
+
+```text
+ps2-system/fpkg/
+├── configs/SCUS-97399.txt
+├── lua/SCUS-97399_config.lua
+└── backgrounds/SCUS-97399.png
+```
+
+Per-game files may be named with either spelling of the serial (`SCUS-97399` or `SCUS97399`).
+
+The cached/local PS2 cover becomes the 512×512 PS4 icon and 228×128 save icon; images are decoded, rescaled, and re-encoded as PNG in-process. A configured background becomes `pic1.png` at 1920×1080. Games without a cover retain the emulator template artwork. Titles must fit the template's `TITLE` field (128 bytes in the stock template), and games with unknown serials are rejected before conversion.
 
 For FAT32-compatible images, the installer writes OPL's `DVD/<SERIAL>.<title>.iso` layout. Images above the FAT32 single-file limit use the official USBExtreme layout: 1 GiB `ul.<crc>.<serial>.<part>` files plus fixed 64-byte records in the root `ul.cfg`. Existing unrelated `ul.cfg` records are preserved. Writes use `.partial` files, support cancellation, and are verified before completion.
 
@@ -313,6 +346,12 @@ GET    /api/ps2/queue
 GET    /api/ps2/queue/{id}
 POST   /api/ps2/queue/{id}/cancel
 POST   /api/ps2/queue/{id}/retry
+GET    /api/ps2/fpkg/status
+POST   /api/ps2/fpkg/queue
+GET    /api/ps2/fpkg/queue
+GET    /api/ps2/fpkg/queue/{id}
+POST   /api/ps2/fpkg/queue/{id}/cancel
+POST   /api/ps2/fpkg/queue/{id}/retry
 GET    /api/ps4/games
 GET    /api/ps4/games/{id}/cover
 GET    /api/ps4/covers/status

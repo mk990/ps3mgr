@@ -14,6 +14,7 @@ type Config struct {
 	PS2SystemDir     string
 	PS2USBRoot       string
 	PS2CoverDownload bool
+	PS2FPKGEmulator  string
 	PS4GameDir       string
 	PS4RemoteGameDir string
 	PS4RPIPort       int
@@ -41,6 +42,7 @@ func Load() (Config, error) {
 		PS2SystemDir:     env("PS3MGR_PS2_SYSTEM_DIR", "./ps2-system"),
 		PS2USBRoot:       env("PS3MGR_PS2_USB_MOUNT_ROOT", "/mnt/usb"),
 		PS2CoverDownload: true,
+		PS2FPKGEmulator:  env("PS3MGR_PS2_FPKG_EMULATOR", "./PS22PS4-GUI/bin/emulators/JakV2.pkg"),
 		PS4GameDir:       env("PS3MGR_PS4_GAME_DIR", "./ps4-games"),
 		PS4RemoteGameDir: env("PS3MGR_PS4_REMOTE_GAME_DIR", "/user/app"),
 		PS4RPIPort:       12800,

@@ -43,6 +43,11 @@ func (s *Service) Readiness() ReadinessReport {
 		checks = append(checks, writableDirectoryCheck("ps2_cover_cache", ps2Cache))
 	}
 	checks = append(checks, writableDirectoryCheck("ps4_cover_cache", filepath.Join(s.PS4.GameDir, "covers")))
+	if status := s.PS2.FPKG.Status(); status.Ready {
+		checks = append(checks, ReadinessCheck{Name: "ps2_fpkg_converter", Status: "ok", Path: status.Emulator})
+	} else {
+		checks = append(checks, ReadinessCheck{Name: "ps2_fpkg_converter", Status: "warning", Path: status.Emulator, Detail: status.Message})
+	}
 
 	contentReady := s.PS4.Content.Running()
 	contentDetail := ""

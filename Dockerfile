@@ -28,7 +28,7 @@ ARG COMMIT=unknown
 ARG SOURCE=https://github.com/unknown/ps3mgr
 
 LABEL org.opencontainers.image.title="PlayStation Manager" \
-	  org.opencontainers.image.description="PS2 OPL/USB, PS3 FTP, PS4 Remote PKG, and PS5 ShadowMountPlus manager with independent queues" \
+	  org.opencontainers.image.description="PS2 OPL/USB and PS4 FPKG conversion, PS3 FTP, PS4 Remote PKG, and PS5 ShadowMountPlus manager" \
       org.opencontainers.image.source=$SOURCE \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$COMMIT
@@ -38,6 +38,7 @@ ENV PS3MGR_PS3_GAME_DIR=/games \
 	PS3MGR_PS2_SYSTEM_DIR=/data/ps2/system \
 	PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb \
 	PS3MGR_PS2_COVER_DOWNLOAD=true \
+	PS3MGR_PS2_FPKG_EMULATOR=/data/JakV2.pkg \
 	PS3MGR_PS4_GAME_DIR=/data/ps4 \
 	PS3MGR_PS4_RPI_PORT=12800 \
 	PS3MGR_PS4_PKG_LISTEN=0.0.0.0:8081 \
@@ -49,7 +50,7 @@ ENV PS3MGR_PS3_GAME_DIR=/games \
 COPY --from=build /out/ps3mgr /usr/local/bin/ps3mgr
 
 EXPOSE 8080 8081
-VOLUME ["/games", "/data/ps2", "/data/ps4", "/data/ps5", "/mnt/usb"]
+VOLUME ["/games", "/data", "/data/ps2", "/data/ps4", "/data/ps5", "/mnt/usb"]
 
 ENTRYPOINT ["/usr/local/bin/ps3mgr"]
 CMD ["serve"]

@@ -21,6 +21,8 @@ Usage:
   ps3mgr ps2 compare     --usb USB_ID [--json]
   ps3mgr ps2 install     --usb USB_ID [--all] <GAME...>
   ps3mgr ps2 queue       [--json]
+  ps3mgr ps2 fpkg        [--all] <GAME...>
+  ps3mgr ps2 fpkg-status [--json]
 `)
 		return nil
 	}
@@ -35,8 +37,125 @@ Usage:
 		return r.ps2Install(ctx, application, args[1:])
 	case "queue":
 		return r.ps2Queue(application, args[1:])
+	case "fpkg":
+		return r.ps2FPKG(ctx, application, args[1:])
+	case "fpkg-status":
+		return r.ps2FPKGStatus(application, args[1:])
 	default:
 		return fmt.Errorf("unknown PS2 command %q", args[0])
+	}
+}
+
+func (r Runner) ps2FPKGStatus(application *app.Service, args []string) error {
+	set := newFlagSet("ps2 fpkg-status", r.Err)
+	jsonOutput := set.Bool("json", false, "print JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	status := application.PS2.FPKG.Status()
+	if *jsonOutput {
+		return r.printValue(status, true)
+	}
+	fmt.Fprintf(r.Out, "PS2 FPKG converter ready: %t\n", status.Ready)
+	fmt.Fprintf(r.Out, "Converter: %s\nEmulator: %s\nOutput: %s\n", status.Converter, status.Emulator, status.OutputDir)
+	if status.Message != "" {
+		fmt.Fprintf(r.Out, "Problem: %s\n", status.Message)
+	}
+	return nil
+}
+
+func (r Runner) ps2FPKG(ctx context.Context, application *app.Service, args []string) error {
+	set := newFlagSet("ps2 fpkg", r.Err)
+	directory := set.String("dir", "", "PS2 ISO directory")
+	all := set.Bool("all", false, "convert every PS2 game with a known serial")
+	jsonOutput := set.Bool("json", false, "print JSON")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	gamesList, err := application.PS2.LocalGames(ctx, *directory)
+	if err != nil {
+		return err
+	}
+	selected := make([]ps2.Game, 0)
+	if *all {
+		for _, game := range gamesList {
+			if game.ID != "unknown" {
+				selected = append(selected, game)
+			}
+		}
+	} else {
+		for _, wanted := range set.Args() {
+			found := false
+			for _, game := range gamesList {
+				if strings.EqualFold(wanted, game.Title) || strings.EqualFold(wanted, game.ID) || strings.EqualFold(wanted, game.ISOFilename) || wanted == game.PublicID {
+					selected = append(selected, game)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("PS2 game %q not found", wanted)
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return fmt.Errorf("no PS2 games selected for FPKG conversion")
+	}
+	ids := make([]string, len(selected))
+	for i := range selected {
+		ids[i] = selected[i].PublicID
+	}
+	jobs, err := application.PS2.EnqueueFPKG(ids)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		if err := r.printValue(jobs, true); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(r.Out, "Queued %d PS2 game(s) for PS4 FPKG conversion.\n", len(jobs))
+	}
+	wanted := make(map[string]bool, len(jobs))
+	for _, job := range jobs {
+		wanted[job.ID] = true
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			for id := range wanted {
+				_ = application.PS2.FPKG.Cancel(id)
+			}
+			return ctx.Err()
+		case <-ticker.C:
+			terminal, failed := true, false
+			for _, job := range application.PS2.FPKG.List() {
+				if !wanted[job.ID] {
+					continue
+				}
+				if job.State == ps2.FPKGFailed {
+					failed = true
+				}
+				if job.State != ps2.FPKGCompleted && job.State != ps2.FPKGFailed && job.State != ps2.FPKGCancelled {
+					terminal = false
+				}
+			}
+			if terminal {
+				if failed {
+					return fmt.Errorf("one or more PS2 FPKG conversions failed")
+				}
+				if !*jsonOutput {
+					for _, job := range application.PS2.FPKG.List() {
+						if wanted[job.ID] && job.OutputPath != "" {
+							fmt.Fprintf(r.Out, "Created %s\n", job.OutputPath)
+						}
+					}
+				}
+				return nil
+			}
+		}
 	}
 }
 

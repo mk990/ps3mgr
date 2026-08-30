@@ -237,6 +237,7 @@ func TestEmptyCollectionAPIsReturnArrays(t *testing.T) {
 		"/api/consoles",
 		"/api/queue",
 		"/api/ps2/queue",
+		"/api/ps2/fpkg/queue",
 		"/api/ps4/games",
 		"/api/ps4/consoles",
 		"/api/ps4/queue",
@@ -257,6 +258,11 @@ func TestEmptyCollectionAPIsReturnArrays(t *testing.T) {
 	handler.ServeHTTP(coverStatus, httptest.NewRequest(http.MethodGet, "/api/ps4/covers/status", nil))
 	if coverStatus.Code != http.StatusOK || !strings.Contains(coverStatus.Body.String(), filepath.Join(ps4Root, "covers")) {
 		t.Fatalf("PS4 cover status = %d: %s", coverStatus.Code, coverStatus.Body.String())
+	}
+	fpkgStatus := httptest.NewRecorder()
+	handler.ServeHTTP(fpkgStatus, httptest.NewRequest(http.MethodGet, "/api/ps2/fpkg/status", nil))
+	if fpkgStatus.Code != http.StatusOK || !strings.Contains(fpkgStatus.Body.String(), `"ready":false`) || !strings.Contains(fpkgStatus.Body.String(), "emulator FPKG") {
+		t.Fatalf("PS2 FPKG status = %d: %s", fpkgStatus.Code, fpkgStatus.Body.String())
 	}
 }
 

@@ -16,6 +16,7 @@ type Service struct {
 	Library    Library
 	USB        *USBManager
 	Queue      *Queue
+	FPKG       *FPKGQueue
 	Filesystem *Filesystem
 	Covers     *CoverCache
 	events     Publisher
@@ -75,6 +76,10 @@ func NewService(gameDir, systemDir, usbRoot string, events Publisher) *Service {
 	s.Queue = NewQueue(installer{usb: usb, filesystem: filesystem}, events)
 	usb.Start(context.Background(), 3*time.Second)
 	return s
+}
+
+func (s *Service) ConfigureFPKG(config FPKGConfig) {
+	s.FPKG = NewFPKGQueue(FPKGBuilder{Config: config}, s.events)
 }
 
 func (s *Service) LocalGames(ctx context.Context, override string) ([]Game, error) {
@@ -253,7 +258,47 @@ func (s *Service) Enqueue(usbID string, gameIDs []string) ([]Job, error) {
 	}
 	return s.Queue.Enqueue(selected, usbID)
 }
-func (s *Service) Close(ctx context.Context) error { s.USB.Close(); return s.Queue.Close(ctx) }
+
+func (s *Service) EnqueueFPKG(gameIDs []string) ([]FPKGJob, error) {
+	if s.FPKG == nil {
+		return nil, fmt.Errorf("PS2 FPKG converter is not configured")
+	}
+	if len(gameIDs) == 0 {
+		return nil, fmt.Errorf("game_ids cannot be empty")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	selected := make([]Game, 0, len(gameIDs))
+	for _, wanted := range gameIDs {
+		found := false
+		for _, game := range s.games {
+			if game.PublicID == wanted {
+				selected = append(selected, game)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown PS2 game %q", wanted)
+		}
+	}
+	return s.FPKG.Enqueue(selected)
+}
+
+func (s *Service) Close(ctx context.Context) error {
+	s.USB.Close()
+	if s.FPKG == nil {
+		return s.Queue.Close(ctx)
+	}
+	errors := make(chan error, 2)
+	go func() { errors <- s.Queue.Close(ctx) }()
+	go func() { errors <- s.FPKG.Close(ctx) }()
+	first := <-errors
+	if second := <-errors; first == nil {
+		first = second
+	}
+	return first
+}
 func (s *Service) publish(event string, payload any) {
 	if s.events != nil {
 		s.events.Publish(event, payload)

@@ -58,6 +58,9 @@ func New(cfg config.Config) *Service {
 	service.Transfers = transfers.New(ftpService, bus, cfg.RemoteGameDir)
 	service.Pulls = transfers.NewDownload(ftpService, bus, cfg.PS3GameDir, domain.PlatformPS3)
 	service.PS2 = ps2.NewService(cfg.PS2GameDir, cfg.PS2SystemDir, cfg.PS2USBRoot, bus)
+	service.PS2.ConfigureFPKG(ps2.FPKGConfig{
+		Emulator: cfg.PS2FPKGEmulator, OutputDir: cfg.PS4GameDir, SupportDir: cfg.PS2SystemDir,
+	})
 	service.PS4 = ps4.NewService(cfg.PS4GameDir, cfg.PS4RemoteGameDir, cfg.PS4PKGListen, cfg.PS4AdvertiseURL, cfg.PS4RPIPort, cfg.Workers, cfg.ScanTimeout, cfg.PS4RPITimeout, bus)
 	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
 	if cfg.PS2CoverDownload {
