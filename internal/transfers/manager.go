@@ -298,7 +298,7 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 		}
 		value.BytesTransferred += progress.Delta
 		if value.TotalBytes > 0 && value.BytesTransferred > value.TotalBytes {
-			value.BytesTransferred = value.TotalBytes
+			value.TotalBytes = value.BytesTransferred
 		}
 		elapsed := time.Since(started)
 		value.ElapsedSeconds = int64(elapsed.Seconds())
