@@ -343,14 +343,29 @@ func (b *pkgBuilder) buildHeaderAndEntries(pfsSize int64) error {
 			entry.size = meta.dataSize
 		}
 		if entry == b.shaEnt {
-			// Reserve room for one digest per 64 KiB chunk of the finished PKG.
-			estimate := uint64(0)
+			// Reserve room for one digest per 64 KiB chunk of the finished
+			// PKG. The sha table's own size feeds back into the package
+			// size (and, through pkgAlign, can push it past an extra
+			// alignment boundary), so solve for a fixed point that mirrors
+			// the real bodySize/packageSize computation done below exactly,
+			// instead of a one-shot estimate that can undershoot.
+			otherSize := uint64(0)
 			for _, e := range b.entries {
-				estimate += align(uint64(e.size), 16)
+				if e == b.shaEnt {
+					continue
+				}
+				otherSize += align(uint64(e.size), 16)
 			}
-			pkgSize := align(b.header.bodyOffset+estimate, pkgAlign) + uint64(pfsSize)
-			pkgSize += ((pkgSize + 16) / 0x10000) * 4
-			meta.dataSize = uint32(pkgSize/0x10000) * 4
+			shaSize := uint64(0)
+			for i := 0; i < 8; i++ {
+				pkgSize := align(b.header.bodyOffset+otherSize+align(shaSize, 16), pkgAlign) + uint64(pfsSize)
+				needed := 4 * (pkgSize / 0x10000)
+				if needed <= shaSize {
+					break
+				}
+				shaSize = needed
+			}
+			meta.dataSize = uint32(shaSize)
 			entry.size = meta.dataSize
 		}
 		dataOffset = align(dataOffset+uint64(meta.dataSize), 16)
