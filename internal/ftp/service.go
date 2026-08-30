@@ -307,13 +307,13 @@ func (s *Service) downloadFileAttempt(ctx context.Context, ip, remotePath, local
 				progress(Progress{File: filepath.Base(localPath), Key: remotePath, Total: remoteSize})
 			}
 			switch {
-			case offset == remoteSize && offset > 0:
+			case offset > 0 && offset >= remoteSize && sizeConsistent(offset, remoteSize):
 				if progress != nil {
 					progress(Progress{File: filepath.Base(localPath), Key: remotePath, Delta: offset, Total: expectedSize})
 				}
 				err = nil
 				goto completed
-			case offset > remoteSize:
+			case offset > remoteSize && !sizeConsistent(offset, remoteSize):
 				offset = 0
 				if truncateErr := file.Truncate(0); truncateErr != nil {
 					err = truncateErr
@@ -468,10 +468,26 @@ func (s *Service) uploadFile(ctx context.Context, ip, localPath, remotePath stri
 }
 
 func verifyTransferSize(operation, remotePath string, actual, expected int64) error {
-	if actual != expected {
+	if !sizeConsistent(actual, expected) {
 		return fmt.Errorf("%s integrity check failed for %s: got %d bytes, expected %d", operation, remotePath, actual, expected)
 	}
 	return nil
+}
+
+// sizeConsistent reports whether actual matches a FTP SIZE reply, tolerating
+// GoldHEN's FTP server truncating SIZE to 32 bits for files at or above
+// 4 GiB (verified: it returns the real size mod 2^32). A larger actual size
+// that lands exactly on that wraparound is treated as a match rather than
+// corruption; anything else is a real mismatch.
+func sizeConsistent(actual, expected int64) bool {
+	if expected < 0 || actual == expected {
+		return true
+	}
+	if actual < expected {
+		return false
+	}
+	const wrap = int64(1) << 32
+	return (actual-expected)%wrap == 0
 }
 
 func containsFold(values []string, wanted string) bool {
