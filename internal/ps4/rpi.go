@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -124,6 +126,12 @@ func (c *RPIClient) post(ctx context.Context, ip, path string, payload, decoded 
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.Client.Do(request)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("Remote Package Installer at %s accepted the connection but sent no response; its installer service has likely crashed or hung on the console — relaunch it on the PS4 and retry: %w", endpoint, err)
+		}
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			return nil, fmt.Errorf("Remote Package Installer at %s refused the connection; confirm the installer service is running on the PS4 and the IP/port are correct: %w", endpoint, err)
+		}
 		return nil, fmt.Errorf("Remote Package Installer %s: %w", endpoint, err)
 	}
 	defer response.Body.Close()

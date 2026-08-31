@@ -282,7 +282,7 @@ func (q *Queue) process(ctx context.Context, id string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			progress, err := q.installer.Progress(ctx, job.ConsoleIP, taskID)
+			progress, err := q.pollProgress(ctx, job.ConsoleIP, taskID)
 			if err != nil {
 				return fmt.Errorf("read PS4 install progress: %w", err)
 			}
@@ -327,6 +327,31 @@ func (q *Queue) process(ctx context.Context, id string) error {
 			}
 		}
 	}
+}
+
+// pollProgress reads install progress from the console's Remote Package
+// Installer, retrying transient transport errors (the RPI HTTP service is
+// known to drop connections under I/O load mid-install) before giving up.
+func (q *Queue) pollProgress(ctx context.Context, ip string, taskID int) (InstallProgress, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return InstallProgress{}, ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+		progress, err := q.installer.Progress(ctx, ip, taskID)
+		if err == nil {
+			return progress, nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return InstallProgress{}, err
+		}
+	}
+	return InstallProgress{}, lastErr
 }
 
 func (q *Queue) finish(id string, err error) {
