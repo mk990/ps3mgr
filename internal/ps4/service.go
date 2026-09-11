@@ -228,10 +228,15 @@ func NewService(gameDir, remoteGameDir, listen, advertiseURL string, rpiPort, wo
 	ftpService := &ps3ftp.Service{User: "anonymous", Timeout: requestTimeout, Port: "2121", RemoteRoot: remoteGameDir}
 	content := NewContentServer(listen, advertiseURL, gameDir)
 	covers := &CoverCache{}
+	tasks := NewFileTaskStore(filepath.Join(gameDir, ".rpi-pending-tasks.json"))
+	queue := NewQueue(client, content, events, tasks)
+	// Reconciliation may block on an unreachable console (up to the RPI
+	// request timeout per orphaned task), so it runs off the startup path.
+	go queue.ReconcileOrphanedTasks(context.Background())
 	return &Service{
 		GameDir: gameDir, RPI: client, FTP: ftpService, Pulls: transfers.NewDownload(pullDownloader{ftp: ftpService}, events, gameDir, domain.PlatformPS4), Content: content, Covers: covers, events: events,
 		Scanner:  &scanner.Scanner{Detector: client, Workers: workers, Timeout: scanTimeout, DetectionTimeout: requestTimeout, Port: fmt.Sprint(rpiPort)},
-		Queue:    NewQueue(client, content, events),
+		Queue:    queue,
 		consoles: make(map[string]domain.Console),
 	}
 }

@@ -26,6 +26,7 @@ type Queue struct {
 	installer   Installer
 	provider    PackageProvider
 	events      Publisher
+	tasks       TaskStore
 	items       map[string]*Job
 	order       []string
 	pending     []string
@@ -41,12 +42,41 @@ type Queue struct {
 	pollEvery   time.Duration
 }
 
-func NewQueue(installer Installer, provider PackageProvider, events Publisher) *Queue {
+func NewQueue(installer Installer, provider PackageProvider, events Publisher, tasks TaskStore) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
-	q := &Queue{installer: installer, provider: provider, events: events, items: make(map[string]*Job), stopOnError: make(map[string]bool), rootCtx: ctx, rootStop: cancel, done: make(chan struct{}), pollEvery: time.Second}
+	q := &Queue{installer: installer, provider: provider, events: events, tasks: tasks, items: make(map[string]*Job), stopOnError: make(map[string]bool), rootCtx: ctx, rootStop: cancel, done: make(chan struct{}), pollEvery: time.Second}
 	q.cond = sync.NewCond(&q.mu)
 	go q.run()
 	return q
+}
+
+// ReconcileOrphanedTasks cancels any RPI task left registered by a previous
+// ps3mgr process (e.g. one that crashed or was restarted between a
+// successful /api/install call and its cleanup). Left alone, an orphaned
+// task permanently collides with future installs of the same content
+// (Remote Package Installer error 0x80990015) until the console's Remote
+// Package Installer app is relaunched by hand. Safe to call even when no
+// TaskStore is configured.
+func (q *Queue) ReconcileOrphanedTasks(ctx context.Context) {
+	if q.tasks == nil {
+		return
+	}
+	pending, err := q.tasks.List()
+	if err != nil {
+		q.publish("ps4.task.reconcile_failed", map[string]any{"platform": Platform, "error": err.Error()})
+		return
+	}
+	for _, task := range pending {
+		cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := q.installer.Cancel(cancelCtx, task.ConsoleIP, task.TaskID)
+		cancel()
+		if err != nil {
+			q.publish("ps4.task.orphan_cleanup_failed", map[string]any{"platform": Platform, "console_ip": task.ConsoleIP, "task_id": task.TaskID, "error": err.Error()})
+			continue
+		}
+		_ = q.tasks.Remove(task)
+		q.publish("ps4.task.orphan_cleared", map[string]any{"platform": Platform, "console_ip": task.ConsoleIP, "task_id": task.TaskID})
+	}
 }
 
 func (q *Queue) Enqueue(packages []Package, consoleIP string, stopOnError bool) ([]Job, error) {
@@ -263,15 +293,37 @@ func (q *Queue) process(ctx context.Context, id string) error {
 	// The RPI task stays registered on the console until explicitly
 	// unregistered; any return path other than a verified success must clean
 	// it up, or the next attempt for the same content ID fails immediately
-	// with a "task already exists" error from the console's BGFT service.
+	// with a "task already exists" error from the console's BGFT service
+	// (Remote Package Installer error 0x80990015). The pending task is
+	// persisted to tasks until cleanup is confirmed so an orphan left by a
+	// crash or restart can still be cancelled on the next startup, see
+	// ReconcileOrphanedTasks.
+	pending := PendingTask{ConsoleIP: job.ConsoleIP, TaskID: taskID}
+	if q.tasks != nil {
+		if err := q.tasks.Add(pending); err != nil {
+			q.publish("ps4.task.track_failed", map[string]any{"platform": Platform, "console_ip": job.ConsoleIP, "task_id": taskID, "error": err.Error()})
+		}
+	}
 	succeeded := false
 	defer func() {
 		if succeeded {
+			if q.tasks != nil {
+				_ = q.tasks.Remove(pending)
+			}
 			return
 		}
 		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = q.installer.Cancel(cancelCtx, job.ConsoleIP, taskID)
+		cancelErr := q.installer.Cancel(cancelCtx, job.ConsoleIP, taskID)
 		cancel()
+		if cancelErr != nil {
+			// The pending task entry is deliberately left in place so
+			// ReconcileOrphanedTasks retries the cleanup on next startup.
+			q.publish("ps4.task.cleanup_failed", map[string]any{"platform": Platform, "console_ip": job.ConsoleIP, "task_id": taskID, "error": cancelErr.Error()})
+			return
+		}
+		if q.tasks != nil {
+			_ = q.tasks.Remove(pending)
+		}
 	}()
 
 	lastBytes, lastTime := int64(0), time.Now()

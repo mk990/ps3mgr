@@ -2,6 +2,8 @@ package ps4
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,43 @@ import (
 	ps3ftp "ps3mgr/internal/ftp"
 	"ps3mgr/internal/transfers"
 )
+
+type recordingEvents struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *recordingEvents) Publish(eventType string, _ any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, eventType)
+}
+
+func (r *recordingEvents) has(eventType string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, event := range r.events {
+		if event == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+type failingCancelInstaller struct{}
+
+func (*failingCancelInstaller) Install(context.Context, string, []string) (int, error) {
+	return 11, nil
+}
+func (*failingCancelInstaller) Progress(context.Context, string, int) (InstallProgress, error) {
+	return InstallProgress{Transferred: 100, Total: 100, Complete: true}, nil
+}
+func (*failingCancelInstaller) IsInstalled(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (*failingCancelInstaller) Cancel(context.Context, string, int) error {
+	return fmt.Errorf("connection refused")
+}
 
 type testProvider struct{}
 
@@ -39,7 +78,7 @@ func (*immediateInstaller) Cancel(context.Context, string, int) error { return n
 
 func TestQueueProcessesPackagesSequentially(t *testing.T) {
 	installer := &immediateInstaller{}
-	queue := NewQueue(installer, testProvider{}, nil)
+	queue := NewQueue(installer, testProvider{}, nil, nil)
 	queue.pollEvery = time.Millisecond
 	defer queue.Close(context.Background())
 	items, err := queue.Enqueue([]Package{{Title: "first", Format: "pkg-patch", Size: 100}, {Title: "second", Format: "pkg-patch", Size: 100}}, "192.168.1.4", false)
@@ -83,7 +122,7 @@ func (u *unverifiedInstaller) Cancel(_ context.Context, _ string, taskID int) er
 
 func TestQueueUnregistersTaskWhenPostInstallVerificationFails(t *testing.T) {
 	installer := &unverifiedInstaller{}
-	queue := NewQueue(installer, testProvider{}, nil)
+	queue := NewQueue(installer, testProvider{}, nil, nil)
 	queue.pollEvery = time.Millisecond
 	defer queue.Close(context.Background())
 	items, err := queue.Enqueue([]Package{{Title: "unverified", TitleID: "CUSA10416", Format: "pkg-game", Size: 100}}, "192.168.1.4", false)
@@ -131,7 +170,7 @@ func (u ps3StartUploader) UploadGame(ctx context.Context, _ string, _ domain.Gam
 
 func TestPS4QueueCannotBlockPS3Queue(t *testing.T) {
 	ps4Started, ps3Started := make(chan struct{}, 1), make(chan struct{}, 1)
-	ps4Queue := NewQueue(blockingInstaller{ps4Started}, testProvider{}, nil)
+	ps4Queue := NewQueue(blockingInstaller{ps4Started}, testProvider{}, nil, nil)
 	ps3Queue := transfers.New(ps3StartUploader{ps3Started}, nil, "/dev_hdd0/GAMES")
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -151,5 +190,84 @@ func TestPS4QueueCannotBlockPS3Queue(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("%s queue was blocked by another platform", name)
 		}
+	}
+}
+
+func TestQueuePublishesCleanupFailureAndKeepsPendingTask(t *testing.T) {
+	events := &recordingEvents{}
+	store := NewFileTaskStore(filepath.Join(t.TempDir(), "pending.json"))
+	queue := NewQueue(&failingCancelInstaller{}, testProvider{}, events, store)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "unverified", TitleID: "CUSA10416", Format: "pkg-game", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		last, _ := queue.Get(items[0].ID)
+		if last.State == StateFailed {
+			if !events.has("ps4.task.cleanup_failed") {
+				t.Fatalf("expected ps4.task.cleanup_failed event, got %v", events.events)
+			}
+			tasks, err := store.List()
+			want := PendingTask{ConsoleIP: "192.168.1.4", TaskID: 11}
+			if err != nil || len(tasks) != 1 || tasks[0] != want {
+				t.Fatalf("expected orphaned task %v to stay tracked for retry, got %v, err %v", want, tasks, err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("queue did not fail: %+v", queue.List())
+}
+
+func TestQueueReconcileOrphanedTasksClearsPersistedEntries(t *testing.T) {
+	store := NewFileTaskStore(filepath.Join(t.TempDir(), "pending.json"))
+	orphan := PendingTask{ConsoleIP: "192.168.1.9", TaskID: 42}
+	if err := store.Add(orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	installer := &unverifiedInstaller{} // Cancel succeeds and records the task ID.
+	events := &recordingEvents{}
+	queue := NewQueue(installer, testProvider{}, events, store)
+	defer queue.Close(context.Background())
+
+	queue.ReconcileOrphanedTasks(context.Background())
+
+	installer.mu.Lock()
+	cancelled := append([]int(nil), installer.cancelled...)
+	installer.mu.Unlock()
+	if len(cancelled) != 1 || cancelled[0] != orphan.TaskID {
+		t.Fatalf("expected orphan task %d to be cancelled on startup, got %v", orphan.TaskID, cancelled)
+	}
+	if !events.has("ps4.task.orphan_cleared") {
+		t.Fatalf("expected ps4.task.orphan_cleared event, got %v", events.events)
+	}
+	if tasks, err := store.List(); err != nil || len(tasks) != 0 {
+		t.Fatalf("expected pending store to be empty after reconciliation, got %v, err %v", tasks, err)
+	}
+}
+
+func TestQueueReconcileOrphanedTasksKeepsEntryWhenCancelFails(t *testing.T) {
+	store := NewFileTaskStore(filepath.Join(t.TempDir(), "pending.json"))
+	orphan := PendingTask{ConsoleIP: "192.168.1.9", TaskID: 42}
+	if err := store.Add(orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	events := &recordingEvents{}
+	queue := NewQueue(&failingCancelInstaller{}, testProvider{}, events, store)
+	defer queue.Close(context.Background())
+
+	queue.ReconcileOrphanedTasks(context.Background())
+
+	if !events.has("ps4.task.orphan_cleanup_failed") {
+		t.Fatalf("expected ps4.task.orphan_cleanup_failed event, got %v", events.events)
+	}
+	tasks, err := store.List()
+	if err != nil || len(tasks) != 1 || tasks[0] != orphan {
+		t.Fatalf("expected orphan entry to remain tracked for a later retry, got %v, err %v", tasks, err)
 	}
 }
