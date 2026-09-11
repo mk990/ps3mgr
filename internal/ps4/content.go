@@ -61,7 +61,10 @@ func (s *ContentServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("listen for PS4 package downloads on %s: %w", s.Listen, err)
 	}
-	server := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: defaultReadHeaderTimeout()}
+	// No WriteTimeout: a legitimate PKG transfer can run for many minutes and
+	// must not be cut short mid-download. IdleTimeout only closes connections
+	// sitting idle between requests, so it cannot truncate one in progress.
+	server := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: defaultReadHeaderTimeout(), IdleTimeout: 2 * time.Minute}
 	s.listener, s.server = listener, server
 	go func() { _ = server.Serve(listener) }()
 	return nil

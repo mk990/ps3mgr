@@ -30,7 +30,7 @@ func (s *Server) ps5Scan(w http.ResponseWriter, r *http.Request) {
 		CIDR    string `json:"cidr"`
 		Workers int    `json:"workers"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -50,7 +50,7 @@ func (s *Server) ps5AddConsole(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		IP string `json:"ip"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -110,7 +110,7 @@ func (s *Server) ps5Enqueue(w http.ResponseWriter, r *http.Request) {
 		GameIDs     []string `json:"game_ids"`
 		StopOnError bool     `json:"stop_on_error"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -164,7 +164,7 @@ func (s *Server) ps5Pull(w http.ResponseWriter, r *http.Request) {
 		GameIDs     []string `json:"game_ids"`
 		StopOnError bool     `json:"stop_on_error"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

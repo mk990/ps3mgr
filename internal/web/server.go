@@ -109,7 +109,7 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 		CIDR    string `json:"cidr"`
 		Workers int    `json:"workers"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) addConsole(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		IP string `json:"ip"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -189,7 +189,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 		GameIDs     []string `json:"game_ids"`
 		StopOnError bool     `json:"stop_on_error"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -207,7 +207,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		GameIDs     []string `json:"game_ids"`
 		StopOnError bool     `json:"stop_on_error"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -286,8 +286,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func decodeJSON(r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

@@ -64,7 +64,7 @@ func (s *Server) ps2Enqueue(w http.ResponseWriter, r *http.Request) {
 		USBID   string   `json:"usb_id"`
 		GameIDs []string `json:"game_ids"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -103,7 +103,7 @@ func (s *Server) ps2FPKGEnqueue(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		GameIDs []string `json:"game_ids"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
