@@ -48,7 +48,7 @@ func Load() (Config, error) {
 		PS4RPIPort:       12800,
 		PS4PKGListen:     env("PS3MGR_PS4_PKG_LISTEN", "0.0.0.0:8081"),
 		PS4AdvertiseURL:  env("PS3MGR_PS4_ADVERTISE_URL", ""),
-		PS4RPITimeout:    15 * time.Second,
+		PS4RPITimeout:    30 * time.Second,
 		PS5GameDir:       env("PS3MGR_PS5_GAME_DIR", "./ps5-games"),
 		PS5RemoteGameDir: env("PS3MGR_PS5_REMOTE_GAME_DIR", "/data/etaHEN/games"),
 		PS5FTPPort:       2121,

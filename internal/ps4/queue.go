@@ -44,7 +44,10 @@ type Queue struct {
 
 func NewQueue(installer Installer, provider PackageProvider, events Publisher, tasks TaskStore) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
-	q := &Queue{installer: installer, provider: provider, events: events, tasks: tasks, items: make(map[string]*Job), stopOnError: make(map[string]bool), rootCtx: ctx, rootStop: cancel, done: make(chan struct{}), pollEvery: time.Second}
+	// Remote Package Installer is known to crash under sustained request load
+	// during a long or large install — its own troubleshooting guidance is to
+	// keep progress polling at 2-3s rather than hammering it every second.
+	q := &Queue{installer: installer, provider: provider, events: events, tasks: tasks, items: make(map[string]*Job), stopOnError: make(map[string]bool), rootCtx: ctx, rootStop: cancel, done: make(chan struct{}), pollEvery: 3 * time.Second}
 	q.cond = sync.NewCond(&q.mu)
 	go q.run()
 	return q
