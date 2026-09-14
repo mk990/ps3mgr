@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,9 @@ type Installer interface {
 	Progress(context.Context, string, int) (InstallProgress, error)
 	IsInstalled(context.Context, string, string) (bool, error)
 	Cancel(context.Context, string, int) error
+	Pause(context.Context, string, int) error
+	Resume(context.Context, string, int) error
+	FindTask(context.Context, string, string, int) (int, bool, error)
 }
 
 type PackageProvider interface {
@@ -188,6 +192,61 @@ func (q *Queue) Resume() {
 	q.mu.Unlock()
 }
 
+// PauseJob suspends the install running on the console. The task keeps its
+// registration and its transferred bytes, so ResumeJob continues the download
+// instead of restarting it. Only the active job holds a console task; Pause
+// covers the queue as a whole by holding back jobs that have not started.
+func (q *Queue) PauseJob(id string) error { return q.setJobPaused(id, true) }
+
+// ResumeJob continues an install previously suspended by PauseJob.
+func (q *Queue) ResumeJob(id string) error { return q.setJobPaused(id, false) }
+
+func (q *Queue) setJobPaused(id string, pause bool) error {
+	from, to, verb := StateDownloading, StatePaused, "paused"
+	if !pause {
+		from, to, verb = StatePaused, StateDownloading, "resumed"
+	}
+	q.mu.Lock()
+	item, ok := q.items[id]
+	if !ok {
+		q.mu.Unlock()
+		return fmt.Errorf("PS4 job not found")
+	}
+	if item.State != from || q.activeID != id || item.TaskID <= 0 {
+		state := item.State
+		q.mu.Unlock()
+		return fmt.Errorf("PS4 job in %s state cannot be %s", state, verb)
+	}
+	consoleIP, taskID := item.ConsoleIP, item.TaskID
+	q.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(q.rootCtx, 15*time.Second)
+	defer cancel()
+	var err error
+	if pause {
+		err = q.installer.Pause(ctx, consoleIP, taskID)
+	} else {
+		err = q.installer.Resume(ctx, consoleIP, taskID)
+	}
+	if err != nil {
+		return fmt.Errorf("%s Remote Package Installer task: %w", strings.TrimSuffix(verb, "d"), err)
+	}
+
+	q.mu.Lock()
+	item, ok = q.items[id]
+	if !ok || item.State != from {
+		// The job finished, failed, or was cancelled while the console request
+		// was in flight, so its task state no longer decides anything.
+		q.mu.Unlock()
+		return nil
+	}
+	item.State = to
+	snapshot := *item
+	q.mu.Unlock()
+	q.publish("ps4.job."+verb, snapshot)
+	return nil
+}
+
 func (q *Queue) ClearCompleted() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -285,12 +344,16 @@ func (q *Queue) process(ctx context.Context, id string) error {
 	q.setState(id, StateServing)
 	q.publish("ps4.pkg.serving", q.snapshot(id))
 	q.setState(id, StateRequestingInstall)
-	taskID, err := q.installer.Install(ctx, job.ConsoleIP, urls)
+	taskID, reattached, err := q.registerTask(ctx, job, urls)
 	if err != nil {
-		return fmt.Errorf("start Remote Package Installer task: %w", err)
+		return err
 	}
 	q.update(id, func(item *Job) { item.TaskID = taskID })
-	q.publish("ps4.install.requested", q.snapshot(id))
+	if reattached {
+		q.publish("ps4.install.reattached", q.snapshot(id))
+	} else {
+		q.publish("ps4.install.requested", q.snapshot(id))
+	}
 	q.setState(id, StateDownloading)
 
 	// The RPI task stays registered on the console until explicitly
@@ -382,6 +445,38 @@ func (q *Queue) process(ctx context.Context, id string) error {
 			}
 		}
 	}
+}
+
+// registerTask attaches to the task the console already holds for this
+// content instead of registering a second one. A task outlives the ps3mgr
+// process that created it and its download keeps running on the console, so
+// re-attaching after a restart preserves the bytes already transferred;
+// registering again would only be rejected with a "task already exists" error
+// (Remote Package Installer error 0x80990015).
+func (q *Queue) registerTask(ctx context.Context, job Job, urls []string) (int, bool, error) {
+	if contentID := job.Package.ContentID; contentID != "" {
+		taskID, found, err := q.installer.FindTask(ctx, job.ConsoleIP, contentID, TaskSubTypeDefault)
+		switch {
+		case err != nil:
+			// A failed lookup is not fatal. Registering a fresh task is the
+			// normal path anyway, and it reports any real problem with the
+			// console far more precisely than this probe can.
+			q.publish("ps4.task.lookup_failed", map[string]any{"platform": Platform, "console_ip": job.ConsoleIP, "content_id": contentID, "error": err.Error()})
+		case found:
+			// Whatever registered the task may have left it paused. A resume
+			// is rejected for a task that is already running, so the error is
+			// advisory and progress polling reports the truth either way.
+			resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = q.installer.Resume(resumeCtx, job.ConsoleIP, taskID)
+			cancel()
+			return taskID, true, nil
+		}
+	}
+	taskID, err := q.installer.Install(ctx, job.ConsoleIP, urls)
+	if err != nil {
+		return 0, false, fmt.Errorf("start Remote Package Installer task: %w", err)
+	}
+	return taskID, false, nil
 }
 
 // pollProgress reads install progress from the console's Remote Package
@@ -504,7 +599,7 @@ func (q *Queue) id(prefix string) string {
 }
 func isActive(state JobState) bool {
 	switch state {
-	case StateValidating, StateServing, StateRequestingInstall, StateDownloading, StateVerifying:
+	case StateValidating, StateServing, StateRequestingInstall, StateDownloading, StatePaused, StateVerifying:
 		return true
 	default:
 		return false

@@ -86,3 +86,98 @@ func TestRPIClientProgressIgnoresLocalCopyPercent(t *testing.T) {
 		}
 	}
 }
+
+func TestRPIClientPauseResumeAndFindTask(t *testing.T) {
+	type request struct {
+		path    string
+		taskID  int
+		content string
+		subType int
+	}
+	var seen []request
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			TaskID    int    `json:"task_id"`
+			ContentID string `json:"content_id"`
+			SubType   int    `json:"sub_type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		seen = append(seen, request{path: r.URL.Path, taskID: body.TaskID, content: body.ContentID, subType: body.SubType})
+		var response string
+		switch r.URL.Path {
+		case "/api/pause_task", "/api/resume_task":
+			response = `{ "status": "success" }`
+		case "/api/find_task":
+			if body.ContentID == "UP0001-CUSA12345_00-ABCDEFGHIJKLMNOP" {
+				response = `{ "status": "success", "task_id": 7 }`
+			} else {
+				// A lookup that matches nothing is reported by the console as a
+				// background-download failure at HTTP 200, not as an empty result.
+				response = `{ "status": "fail", "error_code": 0x80990015 }`
+			}
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(bytes.NewBufferString("not found")), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewBufferString(response)), Header: make(http.Header)}, nil
+	})
+	client := &RPIClient{Port: DefaultRPIPort, Client: &http.Client{Transport: transport}}
+
+	if err := client.Pause(context.Background(), "192.168.1.4", 7); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := client.Resume(context.Background(), "192.168.1.4", 7); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	taskID, found, err := client.FindTask(context.Background(), "192.168.1.4", "up0001-cusa12345_00-abcdefghijklmnop", TaskSubTypeDefault)
+	if err != nil || !found || taskID != 7 {
+		t.Fatalf("find task: task=%d found=%v err=%v", taskID, found, err)
+	}
+	taskID, found, err = client.FindTask(context.Background(), "192.168.1.4", "UP0001-CUSA99999_00-ABCDEFGHIJKLMNOP", TaskSubTypeDefault)
+	if err != nil || found || taskID != 0 {
+		t.Fatalf("missing task: task=%d found=%v err=%v", taskID, found, err)
+	}
+
+	want := []request{
+		{path: "/api/pause_task", taskID: 7},
+		{path: "/api/resume_task", taskID: 7},
+		{path: "/api/find_task", content: "UP0001-CUSA12345_00-ABCDEFGHIJKLMNOP"},
+		{path: "/api/find_task", content: "UP0001-CUSA99999_00-ABCDEFGHIJKLMNOP"},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("requests = %+v, want %+v", seen, want)
+	}
+	for index, got := range seen {
+		if got != want[index] {
+			t.Fatalf("request %d = %+v, want %+v", index, got, want[index])
+		}
+	}
+}
+
+// The console truncates a content ID into a fixed size buffer, so an oversized
+// or malformed value must be rejected before it can match an unrelated task.
+func TestRPIClientFindTaskRejectsInvalidContentID(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request to %s", r.URL.Path)
+		return nil, nil
+	})
+	client := &RPIClient{Port: DefaultRPIPort, Client: &http.Client{Transport: transport}}
+	for _, contentID := range []string{"", "CUSA12345", "UP0001-CUSA12345_00-ABCDEFGHIJKLMNOPQ", `UP0001-CUSA12345_00-ABCDEFGHIJKLMN"P`} {
+		if _, _, err := client.FindTask(context.Background(), "192.168.1.4", contentID, TaskSubTypeDefault); err == nil {
+			t.Fatalf("content ID %q was accepted", contentID)
+		}
+	}
+}
+
+// A find_task lookup that fails for transport reasons must not be reported as
+// "no task registered", which would hide a console that is unreachable.
+func TestRPIClientFindTaskReportsTransportFailure(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(bytes.NewBufferString("boom")), Header: make(http.Header)}, nil
+	})
+	client := &RPIClient{Port: DefaultRPIPort, Client: &http.Client{Transport: transport}}
+	if _, found, err := client.FindTask(context.Background(), "192.168.1.4", "UP0001-CUSA12345_00-ABCDEFGHIJKLMNOP", TaskSubTypeDefault); err == nil || found {
+		t.Fatalf("found=%v err=%v, want an error", found, err)
+	}
+}

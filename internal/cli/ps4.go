@@ -24,7 +24,8 @@ Usage:
   ps3mgr ps4 pull    --ip IP GAME...
   ps3mgr ps4 queue [--json]
 
-The PS4 must be running flatZ Remote Package Installer on port 12800.
+The PS4 must be running Remote Package Installer. Set PS3MGR_PS4_RPI_PORT to its
+port: 12800 for flatZ's build, 12801 for the OpenOrbis ports of it.
 PS3MGR_PS4_ADVERTISE_URL must be reachable by the PS4 for installs.
 `)
 		return nil

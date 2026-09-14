@@ -173,6 +173,25 @@ func (s *Server) ps4Cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ps4PauseJob suspends the install task on the console for one job. The
+// whole-queue POST /api/ps4/queue/pause only holds back jobs that have not
+// started yet, so it cannot stop a transfer already running on the PS4.
+func (s *Server) ps4PauseJob(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Queue.PauseJob(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ps4ResumeJob(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.PS4.Queue.ResumeJob(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) ps4Retry(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.PS4.Queue.Retry(r.PathValue("id")); err != nil {
 		writeError(w, http.StatusConflict, err)

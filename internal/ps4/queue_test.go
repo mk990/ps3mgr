@@ -35,7 +35,17 @@ func (r *recordingEvents) has(eventType string) bool {
 	return false
 }
 
-type failingCancelInstaller struct{}
+// noopTaskControl supplies the task-control half of Installer for fakes that
+// only exercise the install path.
+type noopTaskControl struct{}
+
+func (noopTaskControl) Pause(context.Context, string, int) error  { return nil }
+func (noopTaskControl) Resume(context.Context, string, int) error { return nil }
+func (noopTaskControl) FindTask(context.Context, string, string, int) (int, bool, error) {
+	return 0, false, nil
+}
+
+type failingCancelInstaller struct{ noopTaskControl }
 
 func (*failingCancelInstaller) Install(context.Context, string, []string) (int, error) {
 	return 11, nil
@@ -57,6 +67,7 @@ func (testProvider) Register(pkg Package) ([]string, func(), error) {
 }
 
 type immediateInstaller struct {
+	noopTaskControl
 	mu    sync.Mutex
 	order []string
 }
@@ -102,6 +113,7 @@ func TestQueueProcessesPackagesSequentially(t *testing.T) {
 }
 
 type unverifiedInstaller struct {
+	noopTaskControl
 	mu        sync.Mutex
 	cancelled []int
 }
@@ -145,7 +157,10 @@ func TestQueueUnregistersTaskWhenPostInstallVerificationFails(t *testing.T) {
 	t.Fatalf("queue did not fail: %+v", queue.List())
 }
 
-type blockingInstaller struct{ started chan struct{} }
+type blockingInstaller struct {
+	noopTaskControl
+	started chan struct{}
+}
 
 func (b blockingInstaller) Install(ctx context.Context, _ string, _ []string) (int, error) {
 	b.started <- struct{}{}
@@ -170,7 +185,7 @@ func (u ps3StartUploader) UploadGame(ctx context.Context, _ string, _ domain.Gam
 
 func TestPS4QueueCannotBlockPS3Queue(t *testing.T) {
 	ps4Started, ps3Started := make(chan struct{}, 1), make(chan struct{}, 1)
-	ps4Queue := NewQueue(blockingInstaller{ps4Started}, testProvider{}, nil, nil)
+	ps4Queue := NewQueue(blockingInstaller{started: ps4Started}, testProvider{}, nil, nil)
 	ps3Queue := transfers.New(ps3StartUploader{ps3Started}, nil, "/dev_hdd0/GAMES")
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -269,5 +284,182 @@ func TestQueueReconcileOrphanedTasksKeepsEntryWhenCancelFails(t *testing.T) {
 	tasks, err := store.List()
 	if err != nil || len(tasks) != 1 || tasks[0] != orphan {
 		t.Fatalf("expected orphan entry to remain tracked for a later retry, got %v, err %v", tasks, err)
+	}
+}
+
+// stallingInstaller keeps a job in DOWNLOADING so its task can be paused and
+// resumed, and records every task-control call the queue makes.
+type stallingInstaller struct {
+	mu       sync.Mutex
+	calls    []string
+	existing int
+}
+
+func (s *stallingInstaller) record(call string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, call)
+}
+func (s *stallingInstaller) history() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+func (s *stallingInstaller) Install(context.Context, string, []string) (int, error) {
+	s.record("install")
+	return 21, nil
+}
+func (*stallingInstaller) Progress(context.Context, string, int) (InstallProgress, error) {
+	return InstallProgress{Transferred: 50, Total: 100}, nil
+}
+func (*stallingInstaller) IsInstalled(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (s *stallingInstaller) Cancel(context.Context, string, int) error {
+	s.record("cancel")
+	return nil
+}
+func (s *stallingInstaller) Pause(_ context.Context, _ string, taskID int) error {
+	s.record(fmt.Sprintf("pause:%d", taskID))
+	return nil
+}
+func (s *stallingInstaller) Resume(_ context.Context, _ string, taskID int) error {
+	s.record(fmt.Sprintf("resume:%d", taskID))
+	return nil
+}
+func (s *stallingInstaller) FindTask(_ context.Context, _ string, contentID string, subType int) (int, bool, error) {
+	s.record(fmt.Sprintf("find:%s:%d", contentID, subType))
+	if s.existing == 0 {
+		return 0, false, nil
+	}
+	return s.existing, true, nil
+}
+
+func waitForState(t *testing.T, queue *Queue, id string, state JobState) Job {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if job, ok := queue.Get(id); ok && job.State == state {
+			return job
+		}
+		time.Sleep(time.Millisecond)
+	}
+	job, _ := queue.Get(id)
+	t.Fatalf("job never reached %s, last state %s", state, job.State)
+	return Job{}
+}
+
+func TestQueuePausesAndResumesRunningJob(t *testing.T) {
+	installer := &stallingInstaller{}
+	events := &recordingEvents{}
+	queue := NewQueue(installer, testProvider{}, events, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "stalled", Format: "pkg-patch", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := items[0].ID
+	waitForState(t, queue, id, StateDownloading)
+
+	if err := queue.PauseJob(id); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	job, _ := queue.Get(id)
+	if job.State != StatePaused {
+		t.Fatalf("state = %s, want %s", job.State, StatePaused)
+	}
+	// A paused job still holds the console task, so the queue must not treat
+	// it as finished and start the next job on top of it.
+	if !isActive(StatePaused) {
+		t.Fatal("a paused job must still count as active")
+	}
+	if err := queue.PauseJob(id); err == nil {
+		t.Fatal("pausing an already paused job was accepted")
+	}
+
+	if err := queue.ResumeJob(id); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	waitForState(t, queue, id, StateDownloading)
+	if err := queue.ResumeJob(id); err == nil {
+		t.Fatal("resuming a running job was accepted")
+	}
+
+	calls := installer.history()
+	if len(calls) < 3 || calls[0] != "install" || calls[1] != "pause:21" || calls[2] != "resume:21" {
+		t.Fatalf("task control calls = %v", calls)
+	}
+	if !events.has("ps4.job.paused") || !events.has("ps4.job.resumed") {
+		t.Fatalf("missing pause/resume events: %v", events.events)
+	}
+}
+
+func TestQueueRejectsPauseForJobWithoutConsoleTask(t *testing.T) {
+	installer := &blockingInstaller{started: make(chan struct{}, 1)}
+	queue := NewQueue(installer, testProvider{}, nil, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "first", Format: "pkg-patch", Size: 100}, {Title: "second", Format: "pkg-patch", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-installer.started
+	// The second job is still WAITING and owns no task on the console.
+	if err := queue.PauseJob(items[1].ID); err == nil {
+		t.Fatal("pausing a waiting job was accepted")
+	}
+	if err := queue.PauseJob("ps4-job-missing"); err == nil {
+		t.Fatal("pausing an unknown job was accepted")
+	}
+}
+
+// A task registered by an earlier process keeps downloading on the console, so
+// the job must attach to it rather than register a colliding second task.
+func TestQueueReattachesToExistingConsoleTask(t *testing.T) {
+	installer := &stallingInstaller{existing: 88}
+	events := &recordingEvents{}
+	queue := NewQueue(installer, testProvider{}, events, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "orphaned", ContentID: "UP0001-CUSA12345_00-ABCDEFGHIJKLMNOP", Format: "pkg-patch", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := waitForState(t, queue, items[0].ID, StateDownloading)
+	if job.TaskID != 88 {
+		t.Fatalf("task = %d, want the existing console task 88", job.TaskID)
+	}
+	calls := installer.history()
+	if len(calls) < 2 || calls[0] != "find:UP0001-CUSA12345_00-ABCDEFGHIJKLMNOP:0" || calls[1] != "resume:88" {
+		t.Fatalf("task control calls = %v", calls)
+	}
+	for _, call := range calls {
+		if call == "install" {
+			t.Fatalf("a second task was registered for content already installing: %v", calls)
+		}
+	}
+	if !events.has("ps4.install.reattached") {
+		t.Fatalf("missing re-attach event: %v", events.events)
+	}
+}
+
+// A package with no content ID cannot be looked up, and a console that has no
+// task for one that can must still take the normal registration path.
+func TestQueueRegistersFreshTaskWhenNoConsoleTaskExists(t *testing.T) {
+	installer := &stallingInstaller{}
+	queue := NewQueue(installer, testProvider{}, nil, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{{Title: "fresh", Format: "pkg-patch", Size: 100}}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := waitForState(t, queue, items[0].ID, StateDownloading)
+	if job.TaskID != 21 {
+		t.Fatalf("task = %d, want a newly registered task", job.TaskID)
+	}
+	if calls := installer.history(); len(calls) != 1 || calls[0] != "install" {
+		t.Fatalf("task control calls = %v, want a bare install for a package with no content ID", calls)
 	}
 }

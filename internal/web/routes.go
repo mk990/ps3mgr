@@ -92,6 +92,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps4/queue/{id}", s.ps4QueueItem)
 	s.mux.HandleFunc("POST /api/ps4/queue/{id}/cancel", s.ps4Cancel)
 	s.mux.HandleFunc("POST /api/ps4/queue/{id}/retry", s.ps4Retry)
+	s.mux.HandleFunc("POST /api/ps4/queue/{id}/pause", s.ps4PauseJob)
+	s.mux.HandleFunc("POST /api/ps4/queue/{id}/resume", s.ps4ResumeJob)
 	s.mux.HandleFunc("POST /api/ps4/queue/pause", func(w http.ResponseWriter, _ *http.Request) {
 		s.app.PS4.Queue.Pause()
 		s.app.PS4.Pulls.Pause()

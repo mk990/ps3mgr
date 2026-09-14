@@ -18,6 +18,7 @@ export PS3MGR_PS2_USB_MOUNT_ROOT=/mnt/usb
 export PS3MGR_PS2_COVER_DOWNLOAD=true
 export PS3MGR_PS2_FPKG_EMULATOR=/data/JakV2.pkg
 export PS3MGR_PS4_GAME_DIR=/data/ps4
+export PS3MGR_PS4_RPI_PORT=12800
 export PS3MGR_PS4_PKG_LISTEN=0.0.0.0:8081
 export PS3MGR_PS4_ADVERTISE_URL=http://192.168.1.20:8081
 export PS3MGR_PS5_GAME_DIR=/data/ps5
@@ -42,6 +43,7 @@ docker build \
 docker run --rm \
   -p 8080:8080 \
   -p 8081:8081 \
+  -e PS3MGR_PS4_RPI_PORT=12800 \
   -e PS3MGR_PS4_ADVERTISE_URL=http://192.168.1.20:8081 \
   -v /data/games:/games:ro \
 	-v /data/ps2:/data/ps2 \
@@ -214,7 +216,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_PS2_FPKG_EMULATOR` | `./PS22PS4-GUI/bin/emulators/JakV2.pkg` (`/data/JakV2.pkg` in Docker) | User-supplied PS2 Classics emulator fake PKG used as the conversion template |
 | `PS3MGR_PS4_GAME_DIR` | `./ps4-games` | Recursive local PS4 `.pkg` library |
 | `PS3MGR_PS4_REMOTE_GAME_DIR` | `/user/app` | PS4 FTP (port 2121) installed application directory used by `ps4 pull` |
-| `PS3MGR_PS4_RPI_PORT` | `12800` | flatZ Remote Package Installer API port on the PS4 |
+| `PS3MGR_PS4_RPI_PORT` | `12800` | Remote Package Installer API port on the PS4; OpenOrbis builds of RPI listen on `12801` |
 | `PS3MGR_PS4_PKG_LISTEN` | `0.0.0.0:8081` | Local HTTP listener used to stream PKGs to the PS4 |
 | `PS3MGR_PS4_ADVERTISE_URL` | empty | Required for installs; HTTP URL with the manager host's LAN IP and package port |
 | `PS3MGR_PS4_RPI_TIMEOUT` | `15s` | Timeout for Remote Package Installer API calls |
@@ -255,6 +257,10 @@ The browser receives only `/api/ps4/games/{id}/cover`; it never receives an exte
 The writable cache directory must be accessible to the image's non-root UID `65532`.
 
 PS4 installation does not upload the package to the console. The manager starts a concurrent HTTP range server, creates an unguessable temporary URL for each selected part, and tells RPI to download those URLs. URLs are revoked after completion or failure and can only resolve files inside `PS3MGR_PS4_GAME_DIR`. The PS4 queue processes one package group at a time and runs independently from the PS2, PS3, and PS5 workers.
+
+The console must be running a Remote Package Installer. flatZ's original build listens on `12800`; the OpenOrbis ports of it (installable as a homebrew PKG instead of being sent as a payload, and fixing package paths that contain spaces or non-ASCII characters) listen on `12801`. Set `PS3MGR_PS4_RPI_PORT` to match. Detection probes the installer API itself rather than trusting an open port, so a wrong port is reported as "not a PS4 Remote Package Installer" rather than failing later during an install. Only one installer may run on the console at a time; a second one fails to bind and the console must be restarted.
+
+A running install can be paused and resumed per job from `/ps4-queue`. The task keeps its registration and the bytes already transferred on the console, so a resume continues the download instead of restarting it. This is separate from the queue-wide pause, which only holds back jobs that have not started yet. An install task also outlives the manager process: when a job starts, the console is asked whether it already holds a task for that content ID, and an existing one is adopted, preserving its progress instead of colliding with it.
 
 `PS3MGR_PS4_PKG_LISTEN` is where the manager binds locally. `PS3MGR_PS4_ADVERTISE_URL` is the address sent to the PS4. For example, with a manager host at `192.168.1.20`, use `0.0.0.0:8081` for the listener and `http://192.168.1.20:8081` for the advertised URL. Allow TCP 8081 through the host firewall and publish that port from Docker. No external CDN, JavaScript, CSS, or image resource is used by the web panel.
 

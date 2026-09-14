@@ -35,6 +35,7 @@ const (
 	StateServing           JobState = "SERVING"
 	StateRequestingInstall JobState = "REQUESTING_INSTALL"
 	StateDownloading       JobState = "DOWNLOADING"
+	StatePaused            JobState = "PAUSED"
 	StateVerifying         JobState = "VERIFYING"
 	StateCompleted         JobState = "COMPLETED"
 	StateFailed            JobState = "FAILED"
