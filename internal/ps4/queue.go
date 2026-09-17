@@ -580,6 +580,7 @@ func (q *Queue) cancelPendingLocked(queueID, reason string) []Job {
 	}
 	return cancelled
 }
+
 // cancelDependentsLocked cancels the still-waiting patch, DLC, and license jobs
 // for titleID in the same queue after that title's base game failed. Jobs for
 // other titles, and any job already running or finished, are left untouched.
