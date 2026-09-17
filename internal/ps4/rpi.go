@@ -99,6 +99,33 @@ func (c *RPIClient) Progress(ctx context.Context, ip string, taskID int) (Instal
 	return InstallProgress{Transferred: transferred, Total: total, CurrentFile: current, Complete: complete}, nil
 }
 
+// Capacity holds a console partition's storage figures in bytes.
+type Capacity struct {
+	Free  int64
+	Used  int64
+	Total int64
+}
+
+// FreeSpace reports the storage on the partition the console installs games
+// onto (/user). It uses the installer's /api/get_free_space endpoint rather
+// than FTP, so it works with GoldHEN's built-in FTP server, which exposes no
+// free-space command. Total is 0 when the installer predates this endpoint.
+func (c *RPIClient) FreeSpace(ctx context.Context, ip string) (Capacity, error) {
+	var response map[string]any
+	if _, err := c.post(ctx, ip, "/api/get_free_space", map[string]any{}, &response); err != nil {
+		return Capacity{}, err
+	}
+	capacity := Capacity{
+		Total: firstNumber(response, "total"),
+		Free:  firstNumber(response, "free"),
+		Used:  firstNumber(response, "used"),
+	}
+	if capacity.Total <= 0 && capacity.Free <= 0 {
+		return Capacity{}, fmt.Errorf("Remote Package Installer returned no storage figures")
+	}
+	return capacity, nil
+}
+
 func (c *RPIClient) IsInstalled(ctx context.Context, ip, titleID string) (bool, error) {
 	if !titleIDPattern.MatchString(titleID) {
 		return false, fmt.Errorf("invalid PS4 title ID %q", titleID)

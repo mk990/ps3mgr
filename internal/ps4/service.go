@@ -337,11 +337,25 @@ func (s *Service) AddConsole(ctx context.Context, ip string) (domain.Console, er
 		return domain.Console{}, fmt.Errorf("%s:%d is not a PS4 Remote Package Installer", ip, s.RPI.Port)
 	}
 	console := domain.Console{ID: ip, IP: ip, Platform: domain.PlatformPS4, APIPort: s.RPI.Port, Detected: true, LastSeen: time.Now()}
+	s.applyStorage(ctx, &console)
 	s.mu.Lock()
 	s.consoles[ip] = console
 	s.mu.Unlock()
 	s.publish("ps4.console.connected", console)
 	return console, nil
+}
+
+// applyStorage fills the console's storage figures from Remote Package
+// Installer's get_free_space endpoint. It is best-effort: an older installer
+// without the endpoint, or a transient error, leaves the fields untouched
+// rather than failing the caller. FTP is deliberately not used here because
+// GoldHEN's built-in FTP server exposes no free-space command.
+func (s *Service) applyStorage(ctx context.Context, console *domain.Console) {
+	capacity, err := s.RPI.FreeSpace(ctx, console.IP)
+	if err != nil {
+		return
+	}
+	console.StorageFree, console.StorageUsed, console.StorageTotal = capacity.Free, capacity.Used, capacity.Total
 }
 
 func (s *Service) EnsureConsole(ip string) (domain.Console, error) {
@@ -413,6 +427,7 @@ func (s *Service) Compare(ctx context.Context, ip string) ([]Package, error) {
 		}
 	}
 	console.Detected, console.GameCount, console.LastSeen = true, count, time.Now()
+	s.applyStorage(ctx, &console)
 	s.mu.Lock()
 	s.consoles[ip] = console
 	s.mu.Unlock()
@@ -443,7 +458,60 @@ func (s *Service) Enqueue(consoleIP string, packageIDs []string, stopOnError boo
 			return nil, fmt.Errorf("unknown local PS4 package %q", wanted)
 		}
 	}
+	sortForInstall(selected)
 	return s.Queue.Enqueue(selected, consoleIP, stopOnError)
+}
+
+// sortForInstall reorders a batch so each title's base game is installed before
+// the patch and DLC that depend on it. Remote Package Installer rejects a patch
+// or DLC whose base title is not yet installed, so base packages must run first
+// regardless of the order they were selected in. Titles keep the order in which
+// they were first selected, so selecting several games does not shuffle them.
+func sortForInstall(packages []Package) {
+	firstSeen := make(map[string]int, len(packages))
+	for i := range packages {
+		key := titleGroupKey(packages[i])
+		if _, ok := firstSeen[key]; !ok {
+			firstSeen[key] = i
+		}
+	}
+	sort.SliceStable(packages, func(i, j int) bool {
+		ki, kj := firstSeen[titleGroupKey(packages[i])], firstSeen[titleGroupKey(packages[j])]
+		if ki != kj {
+			return ki < kj
+		}
+		return installOrderRank(packages[i].Format) < installOrderRank(packages[j].Format)
+	})
+}
+
+// titleGroupKey groups the packages that belong to the same game. Patches and
+// DLC carry the base game's title ID, so they group with it; a package without
+// a title ID (e.g. a fake PKG built from a non-CUSA title) forms its own group
+// keyed by its unique ID so its selected position is preserved.
+func titleGroupKey(pkg Package) string {
+	if pkg.TitleID != "" {
+		return strings.ToUpper(pkg.TitleID)
+	}
+	return "id:" + pkg.ID
+}
+
+// installOrderRank ranks package formats by install order within a title:
+// base game first, then patch, then DLC, then license. Unclassified packages
+// are treated as base-level content so they are never deferred behind a patch
+// that might depend on them.
+func installOrderRank(format string) int {
+	switch format {
+	case "pkg-game":
+		return 0
+	case "pkg-patch":
+		return 2
+	case "pkg-dlc":
+		return 3
+	case "pkg-license":
+		return 4
+	default:
+		return 1
+	}
 }
 
 func (s *Service) ContentStatus() map[string]any {

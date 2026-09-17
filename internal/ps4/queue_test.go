@@ -112,6 +112,61 @@ func TestQueueProcessesPackagesSequentially(t *testing.T) {
 	t.Fatalf("queue did not complete: %+v", queue.List())
 }
 
+// baseVerifyInstaller completes every install but reports failTitle as not
+// installed, so a base game with that title ID fails its post-install
+// verification while other titles succeed.
+type baseVerifyInstaller struct {
+	noopTaskControl
+	failTitle string
+}
+
+func (*baseVerifyInstaller) Install(context.Context, string, []string) (int, error) { return 5, nil }
+func (*baseVerifyInstaller) Progress(context.Context, string, int) (InstallProgress, error) {
+	return InstallProgress{Transferred: 100, Total: 100, Complete: true}, nil
+}
+func (b *baseVerifyInstaller) IsInstalled(_ context.Context, _ string, titleID string) (bool, error) {
+	return titleID != b.failTitle, nil
+}
+func (*baseVerifyInstaller) Cancel(context.Context, string, int) error { return nil }
+
+func TestBaseGameFailureCancelsOnlyItsDependents(t *testing.T) {
+	installer := &baseVerifyInstaller{failTitle: "CUSA00001"}
+	queue := NewQueue(installer, testProvider{}, nil, nil)
+	queue.pollEvery = time.Millisecond
+	defer queue.Close(context.Background())
+	items, err := queue.Enqueue([]Package{
+		{Title: "A base", TitleID: "CUSA00001", Format: "pkg-game", Size: 100},
+		{Title: "A patch", TitleID: "CUSA00001", Format: "pkg-patch", Size: 100},
+		{Title: "A dlc", TitleID: "CUSA00001", Format: "pkg-dlc", Size: 100},
+		{Title: "B base", TitleID: "CUSA00002", Format: "pkg-game", Size: 100},
+	}, "192.168.1.4", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if last, _ := queue.Get(items[3].ID); last.State == StateCompleted {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	states := make(map[string]JobState)
+	for _, job := range queue.List() {
+		states[job.Package.Title] = job.State
+	}
+	want := map[string]JobState{
+		"A base":  StateFailed,
+		"A patch": StateCancelled,
+		"A dlc":   StateCancelled,
+		"B base":  StateCompleted,
+	}
+	for title, wantState := range want {
+		if states[title] != wantState {
+			t.Fatalf("%q state = %s, want %s (all: %+v)", title, states[title], wantState, states)
+		}
+	}
+}
+
 type unverifiedInstaller struct {
 	noopTaskControl
 	mu        sync.Mutex

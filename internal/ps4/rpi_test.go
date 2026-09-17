@@ -61,6 +61,26 @@ func TestRPIClientOfficialProtocolAndHexProgress(t *testing.T) {
 	}
 }
 
+func TestRPIClientFreeSpaceParsesHexFigures(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/get_free_space" {
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(bytes.NewBufferString("not found")), Header: make(http.Header)}, nil
+		}
+		// The installer reports byte counts as hex, which the RPI client
+		// normalizes before decoding.
+		body := `{ "status": "success", "path": "/user", "total": 0xE2D5B00000, "free": 0xB9B0F00000, "used": 0x290A400000 }`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}, nil
+	})
+	client := &RPIClient{Port: DefaultRPIPort, Client: &http.Client{Transport: transport}}
+	capacity, err := client.FreeSpace(context.Background(), "192.168.1.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity.Total != 0xE2D5B00000 || capacity.Free != 0xB9B0F00000 || capacity.Used != 0x290A400000 {
+		t.Fatalf("capacity = %+v", capacity)
+	}
+}
+
 // local_copy_percent reports 100 for the entire lifetime of a real RPI task,
 // including immediately after registration and mid-transfer, so it must
 // never be treated as a completion signal on its own.

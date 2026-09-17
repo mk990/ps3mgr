@@ -319,8 +319,16 @@ func (q *Queue) run() {
 		q.activeID, q.activeStop = "", nil
 		queueID := item.QueueID
 		var cancelled []Job
-		if err != nil && q.stopOnError[queueID] && !errors.Is(err, context.Canceled) {
+		switch {
+		case err == nil || errors.Is(err, context.Canceled):
+			// Success or a deliberate cancellation cancels nothing else.
+		case q.stopOnError[queueID]:
 			cancelled = q.cancelPendingLocked(queueID, "cancelled after an earlier PS4 job failed")
+		case item.Package.Format == "pkg-game" && item.Package.TitleID != "":
+			// A base game failed: its patch/DLC/license would be rejected by
+			// Remote Package Installer because the base title is absent, so skip
+			// only those. Other titles in the queue keep running.
+			cancelled = q.cancelDependentsLocked(queueID, item.Package.TitleID, "cancelled because the base game install failed")
 		}
 		done := q.queueDoneLocked(queueID)
 		q.mu.Unlock()
@@ -572,6 +580,37 @@ func (q *Queue) cancelPendingLocked(queueID, reason string) []Job {
 	}
 	return cancelled
 }
+// cancelDependentsLocked cancels the still-waiting patch, DLC, and license jobs
+// for titleID in the same queue after that title's base game failed. Jobs for
+// other titles, and any job already running or finished, are left untouched.
+func (q *Queue) cancelDependentsLocked(queueID, titleID, reason string) []Job {
+	var cancelled []Job
+	for _, item := range q.items {
+		if item.QueueID != queueID || item.State != StateWaiting {
+			continue
+		}
+		if !isDependentFormat(item.Package.Format) || !strings.EqualFold(item.Package.TitleID, titleID) {
+			continue
+		}
+		item.State, item.Error = StateCancelled, reason
+		now := time.Now()
+		item.FinishedAt = &now
+		cancelled = append(cancelled, *item)
+	}
+	return cancelled
+}
+
+// isDependentFormat reports whether a package requires its title's base game to
+// be installed first, so it can be skipped when that base game fails.
+func isDependentFormat(format string) bool {
+	switch format {
+	case "pkg-patch", "pkg-dlc", "pkg-license":
+		return true
+	default:
+		return false
+	}
+}
+
 func (q *Queue) publishQueueCompleted(queueID string) {
 	completed, failed, cancelled := 0, 0, 0
 	for _, item := range q.List() {

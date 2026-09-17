@@ -39,6 +39,13 @@ type Console struct {
 	Detected  bool      `json:"detected"`
 	GameCount int       `json:"game_count"`
 	LastSeen  time.Time `json:"last_seen"`
+	// Storage figures for the console's install partition, in bytes. They are
+	// best-effort (populated over FTP when the console exposes it) and stay 0
+	// when unavailable; StorageTotal is also 0 when the server reports only
+	// free space.
+	StorageFree  int64 `json:"storage_free,omitempty"`
+	StorageUsed  int64 `json:"storage_used,omitempty"`
+	StorageTotal int64 `json:"storage_total,omitempty"`
 }
 
 type QueueState string

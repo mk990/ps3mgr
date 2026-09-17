@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ps3mgr/internal/app"
+	"ps3mgr/internal/domain"
 	"ps3mgr/internal/ps4"
 )
 
@@ -138,12 +139,25 @@ func (r Runner) ps4Consoles(application *app.Service, args []string) error {
 		return r.printValue(items, true)
 	}
 	for _, console := range items {
-		fmt.Fprintf(r.Out, "%s:%d  Remote Package Installer\n", console.IP, console.APIPort)
+		fmt.Fprintf(r.Out, "%s:%d  Remote Package Installer%s\n", console.IP, console.APIPort, consoleStorage(console))
 	}
 	if len(items) == 0 {
 		fmt.Fprintln(r.Out, "No PS4 consoles discovered in this process.")
 	}
 	return nil
+}
+
+// consoleStorage renders the storage suffix for a console listing, e.g.
+// "  ·  743.2 GB free of 907.0 GB". It is empty when no figures are known.
+func consoleStorage(console domain.Console) string {
+	switch {
+	case console.StorageTotal > 0:
+		return fmt.Sprintf("  ·  %s free of %s", humanBytes(console.StorageFree), humanBytes(console.StorageTotal))
+	case console.StorageFree > 0:
+		return fmt.Sprintf("  ·  %s free", humanBytes(console.StorageFree))
+	default:
+		return ""
+	}
 }
 
 func (r Runner) ps4AddConsole(ctx context.Context, application *app.Service, args []string) error {

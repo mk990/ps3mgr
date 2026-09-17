@@ -449,6 +449,8 @@ h3 { margin-bottom: 0; font-size: 18px; }
   border-radius: 8px;
   background: linear-gradient(90deg, var(--blue), var(--cyan));
 }
+.storage-line { color: var(--muted); font-size: 13px; margin-top: 6px; }
+.progress.storage-bar { height: 5px; margin: 6px 0 2px; }
 .queue-actions { margin-top: 12px; }
 .loading { padding: 35px 12px; color: var(--muted); }
 .toasts {
