@@ -355,6 +355,110 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .status.transferring, .status.downloading, .status.queued, .status.id_unknown, .status.paused { color: var(--amber); }
 .status.converting, .status.writing, .status.preparing, .status.validating, .status.serving, .status.requesting_install { color: var(--cyan); }
 .status.failed { color: var(--red); }
+.status.unknown { color: #56637a; }
+
+.ps4-game-grid { align-items: start; }
+.ps4-group-card { cursor: default; }
+.ps4-group-card .cover, .ps4-group-card .group-head { cursor: pointer; }
+.ps4-group-card .group-head:focus-visible {
+  outline: 3px solid #9bb6ff;
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+.game-card.partial { border-color: #3f68d8; }
+.game-card.partial::after {
+  content: "–";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 2px solid #dbe6ff;
+  border-radius: 50%;
+  background: #2b3f6d;
+  color: #dbe6ff;
+  box-shadow: 0 4px 14px #0008;
+  font-weight: 900;
+}
+.pkg-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.pkg-badge {
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.pkg-badge.base { color: #83a6ff; }
+.pkg-badge.patch { color: var(--cyan); }
+.pkg-badge.dlc { color: var(--amber); }
+.pkg-expand {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  margin-top: 9px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-align: left;
+}
+.pkg-expand:hover { border-color: #52627e; color: var(--text); }
+.pkg-list { display: grid; gap: 3px; margin-top: 6px; }
+.pkg-list[hidden] { display: none; }
+.pkg-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 9px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: #0e1421;
+  cursor: pointer;
+}
+.pkg-row:hover { background: #172033; }
+.pkg-row input { width: 17px; height: 17px; margin: 0; accent-color: var(--blue); }
+.pkg-row-text { min-width: 0; }
+.pkg-row-name {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-row-file {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-row-size { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.pkg-row .status { grid-column: 2 / -1; text-align: right; }
+
+/* Two cards per row leaves no width for the package list, so an expanded
+   group takes the whole row and puts its cover on a side rail instead. */
+@media (max-width: 639px) {
+  .ps4-group-card.expanded {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: 104px minmax(0, 1fr);
+  }
+  .ps4-group-card.expanded .cover { aspect-ratio: auto; height: 100%; }
+  .ps4-group-card.expanded.selected::after,
+  .ps4-group-card.expanded.partial::after { right: auto; left: 8px; }
+}
 
 .console-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .console-card {
@@ -592,6 +696,7 @@ h3 { margin-bottom: 0; font-size: 18px; }
 @media (hover: hover) and (pointer: fine) {
   .game-card:hover { transform: translateY(-3px); border-color: #52627e; }
   .game-card.selected:hover { border-color: #8aabff; }
+  .ps4-group-card:hover { transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

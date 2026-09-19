@@ -1,4 +1,4 @@
-const state={games:[],consoles:[],queue:[],selected:new Set(),console:null,filter:'all',search:'',sort:'title',ps2Games:[],usb:[],ps2Queue:[],ps2FPKGQueue:[],ps2FPKGStatus:{ready:false},ps2Selected:new Set(),ps2USB:'',ps2Filter:'all',ps2Search:'',ps2Sort:'title',ps4Games:[],ps4Consoles:[],ps4Queue:[],ps4Selected:new Set(),ps4Console:null,ps4Filter:'all',ps4Search:'',ps4Sort:'title',ps4RPIPort:12800,ps5Games:[],ps5Consoles:[],ps5Queue:[],ps5Selected:new Set(),ps5Console:null,ps5Filter:'all',ps5Search:'',ps5Sort:'title'};
+const state={games:[],consoles:[],queue:[],selected:new Set(),console:null,filter:'all',search:'',sort:'title',ps2Games:[],usb:[],ps2Queue:[],ps2FPKGQueue:[],ps2FPKGStatus:{ready:false},ps2Selected:new Set(),ps2USB:'',ps2Filter:'all',ps2Search:'',ps2Sort:'title',ps4Games:[],ps4Consoles:[],ps4Queue:[],ps4Selected:new Set(),ps4Expanded:new Set(),ps4Console:null,ps4Filter:'all',ps4Search:'',ps4Sort:'title',ps4RPIPort:12800,ps5Games:[],ps5Consoles:[],ps5Queue:[],ps5Selected:new Set(),ps5Console:null,ps5Filter:'all',ps5Search:'',ps5Sort:'title'};
 const $=id=>document.getElementById(id);
 const api=async(url,options={})=>{const response=await fetch(url,{headers:{'Content-Type':'application/json'},...options});if(!response.ok){let body={};try{body=await response.json()}catch{}throw new Error(body.error||`Request failed (${response.status})`)}return response.status===204?null:response.json()};
 function singleflight(fn){let running=false,pending=false;const wrapped=async(...args)=>{if(running){pending=true;return}running=true;try{await fn(...args)}finally{running=false;if(pending){pending=false;wrapped(...args)}}};return wrapped}
@@ -55,11 +55,80 @@ $('resumeQueue').onclick=()=>api('/api/queue/resume',{method:'POST'}).then(()=>t
 $('clearQueue').onclick=()=>api('/api/queue/completed',{method:'DELETE'}).then(loadQueue).catch(e=>toast(e.message,'error'));
 async function loadPS4Games(){try{state.ps4Games=asArray(await api('/api/ps4/games'));$('statPS4Games').textContent=state.ps4Games.length;const status=await api('/api/ps4/content/status');state.ps4RPIPort=status.rpi_port||12800;const listener=status.running?`Package server listening on ${escapeHTML(status.listen)}.`:`<span class="status failed">Package server is not listening on ${escapeHTML(status.listen)}.</span>`;$('ps4ContentStatus').innerHTML=status.configured?`${listener} PS4 download URL: <strong>${escapeHTML(status.advertise_url)}</strong>`:`${listener}<br><span class="status failed">${escapeHTML(status.configuration_error||'PS3MGR_PS4_ADVERTISE_URL is not configured.')} Browsing works, but installs cannot start.</span>`;renderPS4Games()}catch(error){$('ps4GameGrid').innerHTML=`<div class="empty">${escapeHTML(error.message)}</div>`;toast(error.message,'error')}}
 async function loadPS4CoverStatus(){const el=$('ps4CoverStatus');try{const status=await api('/api/ps4/covers/status'),path=escapeHTML(status.cache_dir||'covers/');if(status.error){el.innerHTML=`<strong>PS4 cover cache unavailable:</strong> <code>${path}</code><br><span class="status failed">${escapeHTML(status.error)}</span>`;return}el.innerHTML=`<strong>Local PS4 covers ready:</strong> <code>${path}</code> inside the container · ${status.images||0} cached image${status.images===1?'':'s'}. Embedded PKG icons are extracted once; manual CUSA images are reused first.`}catch(error){el.innerHTML=`<strong>PS4 cover status failed:</strong> <span class="status failed">${escapeHTML(error.message)}</span>`}}
-function displayedPS4Games(){const q=state.ps4Search.toLowerCase();return state.ps4Games.filter(pkg=>{const matches=!q||pkg.title.toLowerCase().includes(q)||(pkg.title_id||'').toLowerCase().includes(q)||(pkg.content_id||'').toLowerCase().includes(q);if(!matches)return false;if(state.ps4Filter==='installed')return pkg.installed;if(state.ps4Filter==='missing')return !pkg.installed;if(state.ps4Filter==='queued')return state.ps4Queue.some(j=>j.package&&j.package.id===pkg.id&&!['COMPLETED','FAILED','CANCELLED'].includes(j.state));return true}).sort((a,b)=>state.ps4Sort==='size'?b.size-a.size:a.title.localeCompare(b.title))}
-function ps4QueueState(pkg){const item=[...state.ps4Queue].reverse().find(j=>j.package&&j.package.id===pkg.id);if(item)return item.state==='WAITING'?'QUEUED':item.state;return pkg.installed?'INSTALLED':'NOT_INSTALLED'}
-function renderPS4Games(){const list=displayedPS4Games();$('ps4GameGrid').classList.toggle('empty',!list.length);$('ps4GameGrid').innerHTML=list.length?list.map(pkg=>{const selected=state.ps4Selected.has(pkg.id),status=ps4QueueState(pkg),parts=asArray(pkg.parts);return`<article class="game-card ps4-game-card ${selected?'selected':''}" role="button" tabindex="0" aria-pressed="${selected}" aria-label="${attr(`${selected?'Deselect':'Select'} ${pkg.title}`)}" data-game="${attr(pkg.id)}"><div class="cover">${pkg.cover_url?`<img loading="lazy" src="${attr(pkg.cover_url)}" alt="">`:`<span class="placeholder">PS4</span>`}</div><div class="game-body"><h3 class="game-title" title="${attr(pkg.title)}">${escapeHTML(pkg.title)}</h3><div class="game-meta"><span>${escapeHTML(pkg.title_id||'CUSA unknown')}</span><span>${formatBytes(pkg.size)}</span></div><div class="game-meta"><span>${escapeHTML(pkg.format||'pkg')}</span><span>${parts.length} part${parts.length===1?'':'s'}</span></div><span class="status ${status.toLowerCase()}">${labelState(status)}</span></div></article>`}).join(''):'No PS4 packages match this view.';bindGameCards('.ps4-game-card',state.ps4Selected,renderPS4Games);renderPS4Selection()}
-function renderPS4Selection(){let size=0;state.ps4Games.forEach(pkg=>{if(state.ps4Selected.has(pkg.id))size+=pkg.size});$('ps4SelectionCount').textContent=`${state.ps4Selected.size} package${state.ps4Selected.size===1?'':'s'} selected`;$('ps4SelectionSize').textContent=formatBytes(size);$('ps4InstallSelected').disabled=!state.ps4Selected.size||!state.ps4Console}
-$('ps4GameSearch').oninput=e=>{state.ps4Search=e.target.value;renderPS4Games()};$('ps4GameFilter').onchange=e=>{state.ps4Filter=e.target.value;renderPS4Games()};$('ps4GameSort').onchange=e=>{state.ps4Sort=e.target.value;renderPS4Games()};$('ps4SelectAll').onclick=()=>{displayedPS4Games().forEach(pkg=>state.ps4Selected.add(pkg.id));renderPS4Games()};$('ps4SelectMissing').onclick=()=>{state.ps4Selected.clear();state.ps4Games.filter(pkg=>!pkg.installed).forEach(pkg=>state.ps4Selected.add(pkg.id));renderPS4Games()};$('ps4SelectNone').onclick=()=>{state.ps4Selected.clear();renderPS4Games()};
+const ps4FormatRanks={'pkg-game':0,'pkg-patch':2,'pkg-dlc':3,'pkg-license':4},ps4FormatRoles={'pkg-game':'Base game','pkg-patch':'Patch','pkg-dlc':'DLC','pkg-license':'License'},ps4FormatKinds={'pkg-game':'base','pkg-patch':'patch','pkg-dlc':'dlc','pkg-license':'license'};
+const ps4FormatRank=format=>ps4FormatRanks[format]??1,ps4FormatRole=format=>ps4FormatRoles[format]||'Package';
+// Remote Package Installer reports installs per title ID, and a patch or DLC
+// carries its base game's CUSA, so one CUSA is one group. A package without a
+// title ID cannot be attributed to a game and stands alone under its own ID.
+const ps4GroupKey=pkg=>(pkg.title_id||'').toUpperCase()||`pkg:${pkg.id}`;
+const ps4Version=value=>value?`v${String(value).replace(/^0(?=\d)/,'')}`:'';
+function ps4Groups(){
+  const order=[],byKey=new Map();
+  state.ps4Games.forEach(pkg=>{
+    const key=ps4GroupKey(pkg);
+    let group=byKey.get(key);
+    if(!group){group={key,domID:`ps4-packages-${key.replace(/[^A-Za-z0-9]+/g,'-')}`,titleID:pkg.title_id||'',packages:[],size:0};byKey.set(key,group);order.push(group)}
+    group.packages.push(pkg);group.size+=pkg.size||0;
+  });
+  order.forEach(group=>{
+    group.packages.sort((a,b)=>ps4FormatRank(a.format)-ps4FormatRank(b.format)||a.title.localeCompare(b.title));
+    group.base=group.packages.find(pkg=>pkg.format==='pkg-game');
+    const lead=group.base||group.packages[0];
+    group.title=lead.title;group.region=lead.region||'';
+    group.coverURL=(group.base&&group.base.cover_url)||(group.packages.find(pkg=>pkg.cover_url)||{}).cover_url||'';
+    // title_installed answers "is this CUSA on the console", so a group whose
+    // base PKG is missing from the library still knows the title's state.
+    group.installed=group.packages.some(pkg=>pkg.title_installed||pkg.installed);
+    group.patchVersion=group.packages.filter(pkg=>pkg.format==='pkg-patch').map(pkg=>pkg.version||'').sort().pop()||'';
+    group.counts={base:0,patch:0,dlc:0,license:0,other:0};
+    group.packages.forEach(pkg=>group.counts[ps4FormatKinds[pkg.format]||'other']++);
+  });
+  return order;
+}
+function ps4GroupMatches(group,q){
+  if(!q)return true;
+  if(group.title.toLowerCase().includes(q)||group.titleID.toLowerCase().includes(q))return true;
+  return group.packages.some(pkg=>pkg.title.toLowerCase().includes(q)||(pkg.content_id||'').toLowerCase().includes(q)||asArray(pkg.parts).some(part=>part.name.toLowerCase().includes(q)));
+}
+function ps4Queued(pkg){return state.ps4Queue.some(job=>job.package&&job.package.id===pkg.id&&!['COMPLETED','FAILED','CANCELLED'].includes(job.state))}
+function displayedPS4Groups(){const q=state.ps4Search.toLowerCase();return ps4Groups().filter(group=>{if(!ps4GroupMatches(group,q))return false;if(state.ps4Filter==='installed')return group.installed;if(state.ps4Filter==='missing')return !group.installed;if(state.ps4Filter==='queued')return group.packages.some(ps4Queued);return true}).sort((a,b)=>state.ps4Sort==='size'?b.size-a.size:a.title.localeCompare(b.title))}
+// A patch or DLC has no install state of its own: RPI only answers at title
+// level, so outside the queue they report nothing rather than a false miss.
+function ps4PackageState(pkg){const item=[...state.ps4Queue].reverse().find(job=>job.package&&job.package.id===pkg.id);if(item)return item.state==='WAITING'?'QUEUED':item.state;if(pkg.format==='pkg-game')return pkg.installed?'INSTALLED':'NOT_INSTALLED';return ''}
+function ps4GroupState(group){const active=group.packages.map(ps4PackageState).find(value=>value&&!['INSTALLED','NOT_INSTALLED'].includes(value));return active||(group.installed?'INSTALLED':'NOT_INSTALLED')}
+function ps4GroupBadges(group){
+  const suffix=count=>count>1?` ×${count}`:'',badges=[];
+  if(group.counts.base)badges.push(['base',`BASE${suffix(group.counts.base)}`]);
+  if(group.counts.patch)badges.push(['patch',`PATCH${ps4Version(group.patchVersion)?' '+ps4Version(group.patchVersion):''}${suffix(group.counts.patch)}`]);
+  if(group.counts.dlc)badges.push(['dlc',`DLC${suffix(group.counts.dlc)}`]);
+  if(group.counts.license)badges.push(['license',`LIC${suffix(group.counts.license)}`]);
+  if(group.counts.other)badges.push(['other',`PKG${suffix(group.counts.other)}`]);
+  return badges.map(([kind,label])=>`<span class="pkg-badge ${kind}">${escapeHTML(label)}</span>`).join('');
+}
+function ps4PackageRow(pkg){
+  const parts=asArray(pkg.parts),file=parts.length?parts[0].name:pkg.title,status=ps4PackageState(pkg);
+  const role=ps4FormatRole(pkg.format)+(pkg.format==='pkg-patch'&&pkg.version?` ${ps4Version(pkg.version)}`:'');
+  return `<label class="pkg-row"><input type="checkbox" class="ps4-pkg-toggle" data-package="${attr(pkg.id)}"${state.ps4Selected.has(pkg.id)?' checked':''}><span class="pkg-row-text"><span class="pkg-row-name">${escapeHTML(role)}</span><span class="pkg-row-file" title="${attr(file)}">${escapeHTML(file)}</span></span><span class="pkg-row-size">${formatBytes(pkg.size)}${parts.length>1?` · ${parts.length} parts`:''}</span><span class="status ${status?status.toLowerCase():'unknown'}">${status?labelState(status):'—'}</span></label>`;
+}
+function renderPS4Games(){
+  const groups=displayedPS4Groups(),grid=$('ps4GameGrid');
+  grid.classList.toggle('empty',!groups.length);
+  grid.innerHTML=groups.length?groups.map(group=>{
+    const ids=group.packages.map(pkg=>pkg.id),chosen=ids.filter(id=>state.ps4Selected.has(id)).length;
+    const all=chosen===ids.length,partial=chosen>0&&!all,expanded=state.ps4Expanded.has(group.key),status=ps4GroupState(group);
+    const count=`${ids.length} package${ids.length===1?'':'s'}`;
+    return `<article class="game-card ps4-group-card${all?' selected':''}${partial?' partial':''}${expanded?' expanded':''}"><div class="cover ps4-group-toggle" data-group="${attr(group.key)}">${group.coverURL?`<img loading="lazy" src="${attr(group.coverURL)}" alt="">`:`<span class="placeholder">PS4</span>`}</div><div class="game-body"><div class="group-head ps4-group-toggle" role="button" tabindex="0" aria-pressed="${all}" aria-label="${attr(`${all?'Deselect':'Select'} all ${count} of ${group.title}`)}" data-group="${attr(group.key)}"><h3 class="game-title" title="${attr(group.title)}">${escapeHTML(group.title)}</h3><div class="game-meta"><span>${escapeHTML(group.titleID||'CUSA unknown')}${group.region?` · ${escapeHTML(group.region)}`:''}</span><span>${formatBytes(group.size)}</span></div><div class="pkg-badges">${ps4GroupBadges(group)}</div><span class="status ${status.toLowerCase()}">${labelState(status)}</span></div><button type="button" class="pkg-expand" aria-expanded="${expanded}" aria-controls="${attr(group.domID)}" data-group="${attr(group.key)}">${expanded?'▾':'▸'} ${count}${chosen?` · ${chosen} selected`:''}</button><div class="pkg-list" id="${attr(group.domID)}"${expanded?'':' hidden'}>${group.packages.map(ps4PackageRow).join('')}</div></div></article>`;
+  }).join(''):'No PS4 packages match this view.';
+  bindPS4GroupCards();renderPS4Selection();
+}
+function togglePS4Group(key){const group=ps4Groups().find(item=>item.key===key);if(!group)return;const ids=group.packages.map(pkg=>pkg.id),all=ids.every(id=>state.ps4Selected.has(id));ids.forEach(id=>all?state.ps4Selected.delete(id):state.ps4Selected.add(id));renderPS4Games()}
+function bindPS4GroupCards(){
+  document.querySelectorAll('#ps4GameGrid .ps4-group-toggle').forEach(element=>{const toggle=()=>togglePS4Group(element.dataset.group);element.onclick=toggle;element.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle()}}});
+  document.querySelectorAll('#ps4GameGrid .pkg-expand').forEach(button=>button.onclick=()=>{const key=button.dataset.group;state.ps4Expanded.has(key)?state.ps4Expanded.delete(key):state.ps4Expanded.add(key);renderPS4Games()});
+  document.querySelectorAll('#ps4GameGrid .ps4-pkg-toggle').forEach(input=>input.onchange=()=>{input.checked?state.ps4Selected.add(input.dataset.package):state.ps4Selected.delete(input.dataset.package);renderPS4Games()});
+}
+function renderPS4Selection(){const titles=new Set();let size=0;state.ps4Games.forEach(pkg=>{if(state.ps4Selected.has(pkg.id)){size+=pkg.size||0;titles.add(ps4GroupKey(pkg))}});const count=state.ps4Selected.size;$('ps4SelectionCount').textContent=`${count} package${count===1?'':'s'} selected${titles.size?` · ${titles.size} title${titles.size===1?'':'s'}`:''}`;$('ps4SelectionSize').textContent=formatBytes(size);$('ps4InstallSelected').disabled=!count||!state.ps4Console}
+$('ps4GameSearch').oninput=e=>{state.ps4Search=e.target.value;renderPS4Games()};$('ps4GameFilter').onchange=e=>{state.ps4Filter=e.target.value;renderPS4Games()};$('ps4GameSort').onchange=e=>{state.ps4Sort=e.target.value;renderPS4Games()};$('ps4SelectAll').onclick=()=>{displayedPS4Groups().forEach(group=>group.packages.forEach(pkg=>state.ps4Selected.add(pkg.id)));renderPS4Games()};$('ps4SelectMissing').onclick=()=>{state.ps4Selected.clear();ps4Groups().filter(group=>!group.installed).forEach(group=>group.packages.forEach(pkg=>state.ps4Selected.add(pkg.id)));renderPS4Games()};$('ps4SelectNone').onclick=()=>{state.ps4Selected.clear();renderPS4Games()};
 $('ps4InstallSelected').onclick=async()=>{try{const count=state.ps4Selected.size;await api('/api/ps4/queue',{method:'POST',body:JSON.stringify({console_id:state.ps4Console,package_ids:[...state.ps4Selected]})});state.ps4Selected.clear();await loadPS4Queue();renderPS4Games();toast(`${count} PS4 packages added to the PS4 queue`,'success');showView('ps4queue')}catch(error){toast(error.message,'error')}};
 async function loadPS4Consoles(){try{state.ps4Consoles=asArray(await api('/api/ps4/consoles'));$('statPS4Consoles').textContent=state.ps4Consoles.length;renderPS4Consoles()}catch(error){toast(error.message,'error')}}
 function ps4StorageLine(c){if(c.storage_total>0){const used=Math.max(0,c.storage_total-c.storage_free);const pct=Math.min(100,Math.round(used/c.storage_total*100));return`<p class="storage-line">${formatBytes(c.storage_free)} free of ${formatBytes(c.storage_total)}</p><div class="progress storage-bar"><i style="width:${pct}%"></i></div>`}if(c.storage_free>0){return`<p class="storage-line">${formatBytes(c.storage_free)} free</p>`}return''}

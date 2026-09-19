@@ -272,8 +272,11 @@ func TestGameCardsUseWholeCardSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(script)
-	if strings.Contains(content, `type="checkbox"`) {
-		t.Fatal("game cards still contain checkbox inputs")
+	// The only checkbox in the UI belongs to a PS4 group card's expanded
+	// package list, where base/patch/DLC are picked individually. Every other
+	// card, PS4 group headers included, stays whole-card selectable.
+	if strings.Count(content, `type="checkbox"`) != 1 || !strings.Contains(content, `<input type="checkbox" class="ps4-pkg-toggle"`) {
+		t.Fatal("game cards contain checkbox inputs outside the PS4 package list")
 	}
 	for _, required := range []string{
 		`role="button"`,
@@ -281,8 +284,8 @@ func TestGameCardsUseWholeCardSelection(t *testing.T) {
 		`aria-pressed=`,
 		`bindGameCards('.ps2-game-card'`,
 		`bindGameCards('.ps3-game-card'`,
-		`bindGameCards('.ps4-game-card'`,
 		`bindGameCards('.ps5-game-card'`,
+		`class="group-head ps4-group-toggle" role="button" tabindex="0" aria-pressed=`,
 		`event.key==='Enter'||event.key===' '`,
 	} {
 		if !strings.Contains(content, required) {

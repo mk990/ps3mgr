@@ -21,13 +21,25 @@ var (
 	contentIDPattern = regexp.MustCompile(`(?i)[A-Z]{2}[0-9]{4}-CUSA[0-9]{5}_00-[A-Z0-9]{16}`)
 	titleIDPattern   = regexp.MustCompile(`(?i)CUSA[0-9]{5}`)
 	partPattern      = regexp.MustCompile(`(?i)(?:[._-](?:part)?)([0-9]{1,3})$`)
-	versionPattern   = regexp.MustCompile(`(?i)[._-]V([0-9]{2})([0-9]{2})(?:[._-]|$)`)
+	// Application versions are written both as the official V0100 and as the
+	// v1.00 that repacks use. A trailing digit is never a separator, so the
+	// minor number must be the last two digits of the run.
+	versionPattern = regexp.MustCompile(`(?i)[._-]V([0-9]{1,2})[._]?([0-9]{2})(?:[^0-9]|$)`)
+	// Packages rebuilt outside Sony's tooling routinely carry a content type
+	// that does not match what the file holds, while their names state the
+	// kind outright. A kind spelled as its own word therefore overrides the
+	// header. Trailing digits belong to the word, so dlc01 still reads as DLC,
+	// while Baseball and Database do not read as anything.
+	baseNamePattern  = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:basegame|base)[0-9]*(?:[^A-Za-z0-9]|$)`)
+	patchNamePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:update|patch)[0-9]*(?:[^A-Za-z0-9]|$)`)
+	dlcNamePattern   = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:addcont|addon|dlc)[0-9]*(?:[^A-Za-z0-9]|$)`)
 )
 
 type pkgMetadata struct {
 	path, name, title, contentID, titleID, format, version, region, group string
 	size                                                                  int64
 	part                                                                  int
+	namedBase                                                             bool
 }
 
 type Library struct{}
@@ -86,7 +98,7 @@ func (Library) Scan(ctx context.Context, root string) ([]Package, error) {
 			return strings.ToLower(values[i].name) < strings.ToLower(values[j].name)
 		})
 		first := values[0]
-		pkg := Package{ID: publicID(key), ContentID: first.contentID, TitleID: first.titleID, Title: first.title, Format: first.format, Version: first.version, Region: first.region}
+		pkg := Package{ID: publicID(key), ContentID: first.contentID, TitleID: first.titleID, Title: first.title, Format: first.format, Version: first.version, Region: first.region, NamedBase: first.namedBase}
 		for _, value := range values {
 			pkg.Size += value.size
 			pkg.Parts = append(pkg.Parts, PackagePart{Name: value.name, Size: value.size, Path: value.path})
@@ -96,7 +108,67 @@ func (Library) Scan(ctx context.Context, root string) ([]Package, error) {
 	sort.Slice(result, func(i, j int) bool {
 		return strings.ToLower(result[i].Title) < strings.ToLower(result[j].Title)
 	})
+	// Runs after the sort so an otherwise tied title resolves the same way on
+	// every scan rather than following map iteration order.
+	resolveTitleBases(result)
 	return result, nil
+}
+
+// resolveTitleBases leaves one base game per title. A PS4 title has exactly one
+// base application, but a repack that merges a game with its updates is built
+// as a full game package too, so several files under one title ID can claim to
+// be the base. The winner is the package its file name calls a base, or failing
+// that the lowest application version, because a base application is always the
+// earliest version of its title. The rest are updates of it.
+func resolveTitleBases(packages []Package) {
+	byTitle := make(map[string][]int)
+	for i := range packages {
+		if packages[i].Format == "pkg-game" && packages[i].TitleID != "" {
+			byTitle[packages[i].TitleID] = append(byTitle[packages[i].TitleID], i)
+		}
+	}
+	for _, indexes := range byTitle {
+		if len(indexes) < 2 {
+			continue
+		}
+		best := indexes[0]
+		for _, index := range indexes[1:] {
+			if preferAsBase(packages[index], packages[best]) {
+				best = index
+			}
+		}
+		for _, index := range indexes {
+			if index != best {
+				packages[index].Format, packages[index].NamedBase = "pkg-patch", false
+			}
+		}
+	}
+}
+
+// preferAsBase reports whether candidate is the better base of the two. A file
+// name that says "base" outranks one that does not, and between equals the
+// lower application version wins. An unversioned name sorts lowest because
+// that is how a plain base dump is normally written.
+func preferAsBase(candidate, current Package) bool {
+	if candidate.NamedBase != current.NamedBase {
+		return candidate.NamedBase
+	}
+	return candidate.Version < current.Version
+}
+
+// nameFormat classifies a package from its file name, or returns an empty
+// string when the name names no kind. Base is tested first: a set written as
+// "Game-base-patch01.pkg" is the base download of a patched release.
+func nameFormat(name string) string {
+	switch {
+	case baseNamePattern.MatchString(name):
+		return "pkg-game"
+	case patchNamePattern.MatchString(name):
+		return "pkg-patch"
+	case dlcNamePattern.MatchString(name):
+		return "pkg-dlc"
+	}
+	return ""
 }
 
 func inspectPackage(path, groupScope string) (pkgMetadata, error) {
@@ -121,16 +193,20 @@ func inspectPackage(path, groupScope string) (pkgMetadata, error) {
 	if titleID == "" {
 		titleID = strings.ToUpper(titleIDPattern.FindString(string(header)))
 	}
-	format := packageFormat(header)
 	base := strings.TrimSuffix(info.Name(), filepath.Ext(info.Name()))
+	format := packageFormat(header)
+	named := nameFormat(base)
+	if named != "" {
+		format = named
+	}
 	part, groupName := splitPart(base)
 	title := cleanTitle(groupName, titleID)
 	group := strings.ToLower(groupScope) + "|" + strings.ToUpper(contentID) + "|" + format + "|" + strings.ToLower(groupName)
 	version := ""
 	if match := versionPattern.FindStringSubmatch(base); len(match) == 3 {
-		version = match[1] + "." + match[2]
+		version = fmt.Sprintf("%02s.%s", match[1], match[2])
 	}
-	return pkgMetadata{path: path, name: info.Name(), title: title, contentID: strings.ToUpper(contentID), titleID: titleID, format: format, version: version, region: packageRegion(contentID), group: group, size: info.Size(), part: part}, nil
+	return pkgMetadata{path: path, name: info.Name(), title: title, contentID: strings.ToUpper(contentID), titleID: titleID, format: format, version: version, region: packageRegion(contentID), group: group, size: info.Size(), part: part, namedBase: named == "pkg-game"}, nil
 }
 
 func findContentID(header []byte) string {

@@ -243,6 +243,29 @@ Install and run [flatZ Remote Package Installer](https://github.com/flatz/ps4_re
 
 The local scanner accepts `.pkg` case-insensitively, validates the PS4 PKG magic, reads content/title IDs, classifies game, patch, DLC, and license content, and groups numbered multipart files. Multipart URLs are sent in consecutive order as required by RPI. Invalid files merely renamed to `.pkg` are ignored.
 
+### How a package's kind is decided
+
+Packages rebuilt outside Sony's tooling routinely carry a content type that does not match what the file holds, so two further signals override the header.
+
+A file name that spells out its kind as a whole word wins over the header: `base` or `basegame` makes it a base game, `patch` or `update` a patch, and `dlc`, `addon`, or `addcont` a DLC. Case is ignored, trailing digits belong to the word so `dlc01` still reads as DLC, and a word must be bounded by a separator or the ends of the name — `Baseball`, `Database`, and `Basecamp` are not matched. A name that says both `base` and `patch` is read as the base download of a patched release.
+
+A title then keeps a single base game. A repack that merges a game with its updates is built as a full game package too, so several files under one CUSA can claim to be the base; the one whose name says `base` wins, and failing that the lowest application version does, because a base application is always the earliest version of its title. The rest become patches of it. A title whose only game package is such a repack keeps it as the base, so it stays installable on its own. Both `V0100` and `v1.00` spellings of the version are read, and an unversioned name counts as the earliest.
+
+```text
+Minecraft.PlayStation4.Edition_CUSA00265_v1.00_[1.70]_….pkg   → base game
+Minecraft_CUSA00265_v3.43_BACKPORT_[505-672-7xx-…]_….pkg      → patch
+```
+
+Reclassification only changes a package's badge and its position in the queue. Selecting a patch-classified repack on its own still queues and installs it.
+
+### Title groups in the PS4 Packages page
+
+A patch or DLC carries its base game's title ID, so the PS4 Packages page shows one card per CUSA instead of one card per file. The card carries the title's cover, combined size, and a badge per content kind (`BASE`, `PATCH v1.09`, `DLC ×3`, `LIC`); clicking it selects or deselects the whole title, and expanding it lists the individual packages with their own checkboxes so a single patch or DLC can be queued on its own. A partly selected title is marked with a dash instead of a check. A PKG without a title ID cannot be attributed to a game and stands alone.
+
+Whatever the selection, a submitted batch is ordered base → patch → DLC → license per title, because RPI rejects a patch or DLC whose base title is not yet installed. A base game recognized from its file name leads the whole batch, ahead of every other title. Each package remains its own queue job.
+
+Install state is reported per title, not per file: RPI's `is_exists` answers whether a CUSA is present on the console and cannot prove that a particular patch or DLC was applied. The card's status badge and the `Installed title` / `Missing title` filters therefore describe the title, individual patch and DLC rows show `—` unless they are in the queue, and `Select missing` picks every package of every title the console does not have.
+
 ### Offline PS4 covers
 
 PS4 cover handling is entirely local. During a scan, the manager reads the PKG file table and extracts its embedded `icon0` into `covers/<CUSA>.png` below `PS3MGR_PS4_GAME_DIR`. Existing cached images are reused without reopening the icon payload. A manually supplied image beside the first PKG part, or `covers/CUSAxxxxx.jpg`, `.jpeg`, `.png`, or `.webp`, takes priority over extraction.

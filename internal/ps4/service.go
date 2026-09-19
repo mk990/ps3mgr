@@ -405,9 +405,7 @@ func (s *Service) Compare(ctx context.Context, ip string) ([]Package, error) {
 	}
 	installedByTitle := make(map[string]bool)
 	for i := range items {
-		// RPI's is_exists endpoint reports whether the base title exists. It
-		// cannot prove that a particular patch, DLC, or license is installed.
-		if items[i].TitleID == "" || items[i].Format != "pkg-game" {
+		if items[i].TitleID == "" {
 			continue
 		}
 		installed, ok := installedByTitle[items[i].TitleID]
@@ -418,7 +416,15 @@ func (s *Service) Compare(ctx context.Context, ip string) ([]Package, error) {
 			}
 			installedByTitle[items[i].TitleID] = installed
 		}
-		items[i].Installed = installed
+		// RPI's is_exists endpoint reports whether the base title exists. It
+		// cannot prove that a particular patch, DLC, or license is installed,
+		// so only the base package claims Installed. Every package in the
+		// title carries the title-level answer so the UI can badge a group
+		// whose base PKG is not in the local library.
+		items[i].TitleInstalled = installed
+		if items[i].Format == "pkg-game" {
+			items[i].Installed = installed
+		}
 	}
 	count := 0
 	for _, installed := range installedByTitle {
@@ -462,7 +468,8 @@ func (s *Service) Enqueue(consoleIP string, packageIDs []string, stopOnError boo
 	return s.Queue.Enqueue(selected, consoleIP, stopOnError)
 }
 
-// sortForInstall reorders a batch so each title's base game is installed before
+// sortForInstall reorders a batch so a base game named as such by its file name
+// runs first of all, and so each title's base game is installed before
 // the patch and DLC that depend on it. Remote Package Installer rejects a patch
 // or DLC whose base title is not yet installed, so base packages must run first
 // regardless of the order they were selected in. Titles keep the order in which
@@ -476,6 +483,12 @@ func sortForInstall(packages []Package) {
 		}
 	}
 	sort.SliceStable(packages, func(i, j int) bool {
+		// A base game identified by its file name leads the batch outright,
+		// ahead of every other title, and keeps its selected order among its
+		// peers. Everything after it is grouped by title as usual.
+		if packages[i].NamedBase != packages[j].NamedBase {
+			return packages[i].NamedBase
+		}
 		ki, kj := firstSeen[titleGroupKey(packages[i])], firstSeen[titleGroupKey(packages[j])]
 		if ki != kj {
 			return ki < kj

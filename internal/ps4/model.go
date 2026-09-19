@@ -25,6 +25,16 @@ type Package struct {
 	CoverPath string        `json:"-"`
 	CoverURL  string        `json:"cover_url,omitempty"`
 	Installed bool          `json:"installed"`
+	// NamedBase records that the file name, not the package header, is what
+	// identified this as a base game. Such a package leads its whole install
+	// batch, because a name that spells out "base" is the strongest claim
+	// available that the rest of the selection depends on it.
+	NamedBase bool `json:"named_base,omitempty"`
+	// TitleInstalled reports whether the console already has this package's
+	// title ID installed. Remote Package Installer can only answer at title
+	// level, so a patch or DLC carries the answer for its base game here
+	// while Installed stays reserved for the base package itself.
+	TitleInstalled bool `json:"title_installed"`
 }
 
 type JobState string
