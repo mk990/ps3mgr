@@ -70,6 +70,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/ps2/fpkg/queue/{id}/retry", s.ps2FPKGRetry)
 	s.mux.HandleFunc("GET /api/ps4/games", s.ps4Games)
 	s.mux.HandleFunc("GET /api/ps4/games/{id}/cover", s.ps4Cover)
+	s.mux.HandleFunc("GET /api/ps4/fpkgi/{category}", s.ps4FPKGi)
 	s.mux.HandleFunc("GET /api/ps4/covers/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, s.app.PS4.CoverStatus())
 	})
@@ -109,6 +110,7 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /api/ps5/games", s.ps5Games)
 	s.mux.HandleFunc("GET /api/ps5/games/{id}/icon", s.ps5Icon)
+	s.mux.HandleFunc("GET /api/ps5/fpkgi", s.ps5FPKGi)
 	s.mux.HandleFunc("POST /api/ps5/scan", s.ps5Scan)
 	s.mux.HandleFunc("GET /api/ps5/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Consoles()) })
 	s.mux.HandleFunc("POST /api/ps5/consoles", s.ps5AddConsole)

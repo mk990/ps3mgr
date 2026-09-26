@@ -217,6 +217,7 @@ h3 { margin-bottom: 0; font-size: 18px; }
 }
 .offline-note strong { color: var(--cyan); }
 .offline-note code { color: #c8d6f2; }
+.offline-note a { color: var(--cyan); }
 
 .toolbar {
   display: grid;

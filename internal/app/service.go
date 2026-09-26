@@ -63,10 +63,21 @@ func New(cfg config.Config) *Service {
 	})
 	service.PS4 = ps4.NewService(cfg.PS4GameDir, cfg.PS4RemoteGameDir, cfg.PS4PKGListen, cfg.PS4AdvertiseURL, cfg.PS4RPIPort, cfg.Workers, cfg.ScanTimeout, cfg.PS4RPITimeout, bus)
 	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
+	// The PS4 package server is the only listener consoles reach, so it also
+	// publishes the PS5 FPKGi content list.
+	service.PS4.Content.Mount(ps5.FPKGiPrefix, service.PS5.FPKGiHandler(service.FPKGiAdvertiser))
 	if cfg.PS2CoverDownload {
 		service.PS2.Covers = ps2.NewCoverCache()
 	}
 	return service
+}
+
+// FPKGiAdvertiser returns the package server's LAN base URL for FPKGi links.
+func (s *Service) FPKGiAdvertiser() (string, error) {
+	if err := s.PS4.Content.AdvertiseError(); err != nil {
+		return "", err
+	}
+	return s.PS4.Content.AdvertiseURL, nil
 }
 
 func (s *Service) LocalGames(ctx context.Context, override string) ([]domain.Game, error) {

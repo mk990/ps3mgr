@@ -26,6 +26,12 @@ type ContentServer struct {
 	server   *http.Server
 	listener net.Listener
 	files    map[string]servedPackage
+	mounts   []mountedHandler
+}
+
+type mountedHandler struct {
+	prefix  string
+	handler http.Handler
 }
 
 type servedPackage struct {
@@ -141,6 +147,26 @@ func (s *ContentServer) Register(pkg Package) ([]string, func(), error) {
 	return urls, cleanup, nil
 }
 
+// Mount serves GET and HEAD requests below prefix with handler. It lets other
+// read-only LAN endpoints, such as FPKGi content lists, share the listener the
+// console already reaches. The prefix must start and end with a slash.
+func (s *ContentServer) Mount(prefix string, handler http.Handler) {
+	s.mu.Lock()
+	s.mounts = append(s.mounts, mountedHandler{prefix: prefix, handler: handler})
+	s.mu.Unlock()
+}
+
+func (s *ContentServer) mounted(path string) (http.Handler, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, mount := range s.mounts {
+		if strings.HasPrefix(path, mount.prefix) {
+			return mount.handler, true
+		}
+	}
+	return nil, false
+}
+
 func (s *ContentServer) SetRoot(root string) {
 	s.mu.Lock()
 	s.Root = root
@@ -175,6 +201,10 @@ func (s *ContentServer) Handler() http.Handler {
 				return
 			}
 			s.servePackage(w, r, servedPackage{path: path, name: name})
+			return
+		}
+		if handler, ok := s.mounted(r.URL.Path); ok {
+			handler.ServeHTTP(w, r)
 			return
 		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/ps4-pkg/"), "/")

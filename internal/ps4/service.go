@@ -233,12 +233,14 @@ func NewService(gameDir, remoteGameDir, listen, advertiseURL string, rpiPort, wo
 	// Reconciliation may block on an unreachable console (up to the RPI
 	// request timeout per orphaned task), so it runs off the startup path.
 	go queue.ReconcileOrphanedTasks(context.Background())
-	return &Service{
+	service := &Service{
 		GameDir: gameDir, RPI: client, FTP: ftpService, Pulls: transfers.NewDownload(pullDownloader{ftp: ftpService}, events, gameDir, domain.PlatformPS4), Content: content, Covers: covers, events: events,
 		Scanner:  &scanner.Scanner{Detector: client, Workers: workers, Timeout: scanTimeout, DetectionTimeout: requestTimeout, Port: fmt.Sprint(rpiPort)},
 		Queue:    queue,
 		consoles: make(map[string]domain.Console),
 	}
+	content.Mount(FPKGiPrefix, service.FPKGiHandler())
+	return service
 }
 
 func (s *Service) LocalPackages(ctx context.Context, override string) ([]Package, error) {
