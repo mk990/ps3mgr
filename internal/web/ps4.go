@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"ps3mgr/internal/fpkgi"
 )
 
 func (s *Server) ps4Pull(w http.ResponseWriter, r *http.Request) {
@@ -198,4 +200,17 @@ func (s *Server) ps4Retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ps4FPKGi exports one FPKGi content list ({category} is games, updates, dlc,
+// or all, optionally with a .json suffix) as a downloadable file.
+func (s *Server) ps4FPKGi(w http.ResponseWriter, r *http.Request) {
+	category := strings.TrimSuffix(strings.ToLower(r.PathValue("category")), ".json")
+	items, skipped, err := s.app.PS4.FPKGiItems(r.Context(), category)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.Header().Set("X-FPKGi-Skipped-Split-Packages", fmt.Sprint(skipped))
+	fpkgi.Write(w, r, items, "ps4-"+category+".json")
 }

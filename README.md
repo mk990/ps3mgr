@@ -331,6 +331,35 @@ The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/S
 
 Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` markers before registering a host as a PS5. The web API accepts a console ID and local game IDs, never an arbitrary remote filesystem path. PS5 transfers are sequential within their own queue, but run concurrently with PS2 and PS3 jobs.
 
+## FPKGi content lists
+
+ps3mgr can publish its PS4 and PS5 libraries as [FPKGi](https://github.com/ItsJokerZz/FPKGi) content JSON, so FPKGi on a PS4 or PS5 can browse and download packages straight from this machine. Every entry is keyed by a direct download URL on the PS4 package server (port `8081`), so `PS3MGR_PS4_ADVERTISE_URL` must be set to an address the console can reach; without it the lists return HTTP 503.
+
+Live lists, served by the package server for FPKGi's `CONTENT_URLS` (rescanned on every request):
+
+| FPKGi category | URL |
+| --- | --- |
+| `games` | `http://HOST_LAN_IP:8081/fpkgi/ps4/games.json` |
+| `updates` | `http://HOST_LAN_IP:8081/fpkgi/ps4/updates.json` |
+| `DLC` | `http://HOST_LAN_IP:8081/fpkgi/ps4/dlc.json` |
+| `PS5` | `http://HOST_LAN_IP:8081/fpkgi/ps5/ps5.json` |
+
+For example, in `/user/data/FPKGi/config.json`:
+
+```json
+"CONTENT_URLS": {
+  "games": "http://192.168.1.20:8081/fpkgi/ps4/games.json",
+  "updates": "http://192.168.1.20:8081/fpkgi/ps4/updates.json",
+  "DLC": "http://192.168.1.20:8081/fpkgi/ps4/dlc.json",
+  "PS5": "http://192.168.1.20:8081/fpkgi/ps5/ps5.json"
+}
+```
+
+The same files can be downloaded from the panel (links on the PS4 Packages and PS5 Games pages, or `GET /api/ps4/fpkgi/{category}` and `GET /api/ps5/fpkgi`) and copied to `/user/data/FPKGi/ContentJSONs/`; their URLs still point at the package server.
+
+- **PS4:** packages are grouped as games, updates, or DLC using the same rules as the PS4 Packages page. License-only packages are omitted, and so are split packages (`_0.pkg`, `_1.pkg`, …) because FPKGi downloads a single file per entry. Region, version, and the cached `icon0` cover are included when known.
+- **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. The title ID and region come from the content ID in the file name or package header, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) becomes its cover. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.
+
 ## PS3 and network requirements
 
 - Enable an FTP server on the PS3 (commonly through webMAN MOD, multiMAN, or another trusted homebrew environment).
@@ -384,6 +413,7 @@ POST   /api/ps2/fpkg/queue/{id}/retry
 GET    /api/ps4/games
 GET    /api/ps4/games/{id}/cover
 GET    /api/ps4/covers/status
+GET    /api/ps4/fpkgi/{games|updates|dlc|all}
 POST   /api/ps4/scan
 GET    /api/ps4/consoles
 POST   /api/ps4/consoles
@@ -402,6 +432,7 @@ POST   /api/ps4/queue/resume
 DELETE /api/ps4/queue/completed
 GET    /api/ps5/games
 GET    /api/ps5/games/{id}/icon
+GET    /api/ps5/fpkgi
 POST   /api/ps5/scan
 GET    /api/ps5/consoles
 POST   /api/ps5/consoles

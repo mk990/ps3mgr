@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"ps3mgr/internal/fpkgi"
 )
 
 func (s *Server) ps5Games(w http.ResponseWriter, r *http.Request) {
@@ -174,4 +176,14 @@ func (s *Server) ps5Pull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, items)
+}
+
+// ps5FPKGi exports the PS5 library's .pkg files as an FPKGi content list.
+func (s *Server) ps5FPKGi(w http.ResponseWriter, r *http.Request) {
+	items, err := s.app.PS5.FPKGiItems(r.Context(), s.app.FPKGiAdvertiser)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	fpkgi.Write(w, r, items, "ps5.json")
 }

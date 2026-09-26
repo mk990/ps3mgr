@@ -372,3 +372,39 @@ func TestEmbeddedUIHasNoExternalAssetURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestFPKGiExportsDownloadAndShareThePackageServer(t *testing.T) {
+	application := app.New(config.Config{
+		PS3GameDir:      t.TempDir(),
+		PS2GameDir:      t.TempDir(),
+		PS2SystemDir:    t.TempDir(),
+		PS2USBRoot:      t.TempDir(),
+		PS4GameDir:      t.TempDir(),
+		PS5GameDir:      t.TempDir(),
+		PS4AdvertiseURL: "http://192.168.1.20:8081",
+		FTPTimeout:      time.Second,
+		Workers:         1,
+	})
+	defer application.Close(context.Background())
+	handler := New(application).Handler()
+	for path, filename := range map[string]string{"/api/ps4/fpkgi/games": "ps4-games.json", "/api/ps4/fpkgi/dlc.json": "ps4-dlc.json", "/api/ps5/fpkgi": "ps5.json"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{
+    "DATA": {}
+}` || !strings.Contains(response.Header().Get("Content-Disposition"), filename) {
+			t.Fatalf("GET %s = %d %q: %s", path, response.Code, response.Header().Get("Content-Disposition"), response.Body.String())
+		}
+	}
+	bad := httptest.NewRecorder()
+	handler.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/api/ps4/fpkgi/themes", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("unknown category = %d", bad.Code)
+	}
+	// Consoles fetch the live lists from the LAN package server, not the panel.
+	live := httptest.NewRecorder()
+	application.PS4.Content.Handler().ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/fpkgi/ps5/ps5.json", nil))
+	if live.Code != http.StatusOK {
+		t.Fatalf("PS5 list on package server = %d: %s", live.Code, live.Body.String())
+	}
+}
