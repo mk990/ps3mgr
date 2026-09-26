@@ -239,7 +239,11 @@ func NewService(gameDir, remoteGameDir, listen, advertiseURL string, rpiPort, wo
 		Queue:    queue,
 		consoles: make(map[string]domain.Console),
 	}
-	content.Mount(FPKGiPrefix, service.FPKGiHandler())
+	fpkgiHandler := service.FPKGiHandler()
+	content.Mount(FPKGiPrefix, fpkgiHandler)
+	for _, prefix := range FPKGiAliasPrefixes {
+		content.Mount(prefix, fpkgiHandler)
+	}
 	return service
 }
 

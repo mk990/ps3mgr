@@ -402,9 +402,11 @@ func TestFPKGiExportsDownloadAndShareThePackageServer(t *testing.T) {
 		t.Fatalf("unknown category = %d", bad.Code)
 	}
 	// Consoles fetch the live lists from the LAN package server, not the panel.
-	live := httptest.NewRecorder()
-	application.PS4.Content.Handler().ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/fpkgi/ps5/ps5.json", nil))
-	if live.Code != http.StatusOK {
-		t.Fatalf("PS5 list on package server = %d: %s", live.Code, live.Body.String())
+	for path, want := range map[string]int{"/fpkgi/ps5/ps5.json": http.StatusOK, "/api/ps5/fpkgi": http.StatusOK, "/api/ps5/fpkgi.json": http.StatusOK, "/ps5/fpkgi/ps5.json": http.StatusOK, "/api/ps5/fpkgiX": http.StatusNotFound} {
+		live := httptest.NewRecorder()
+		application.PS4.Content.Handler().ServeHTTP(live, httptest.NewRequest(http.MethodGet, path, nil))
+		if live.Code != want {
+			t.Fatalf("package server %s = %d, want %d: %s", path, live.Code, want, live.Body.String())
+		}
 	}
 }

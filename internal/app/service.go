@@ -65,7 +65,11 @@ func New(cfg config.Config) *Service {
 	service.PS5 = ps5.NewService(cfg.PS5GameDir, cfg.PS5RemoteGameDir, cfg.PS5FTPUser, cfg.PS5FTPPassword, cfg.PS5FTPPort, cfg.Workers, cfg.ScanTimeout, cfg.FTPTimeout, bus)
 	// The PS4 package server is the only listener consoles reach, so it also
 	// publishes the PS5 FPKGi content list.
-	service.PS4.Content.Mount(ps5.FPKGiPrefix, service.PS5.FPKGiHandler(service.FPKGiAdvertiser))
+	ps5FPKGi := service.PS5.FPKGiHandler(service.FPKGiAdvertiser)
+	service.PS4.Content.Mount(ps5.FPKGiPrefix, ps5FPKGi)
+	for _, path := range ps5.FPKGiAliasPaths {
+		service.PS4.Content.Mount(path, ps5FPKGi)
+	}
 	if cfg.PS2CoverDownload {
 		service.PS2.Covers = ps2.NewCoverCache()
 	}

@@ -13,6 +13,11 @@ import (
 // FPKGiPrefix is where the package server publishes FPKGi content lists.
 const FPKGiPrefix = "/fpkgi/ps4/"
 
+// FPKGiAliasPrefixes are other spellings of FPKGiPrefix the package server
+// accepts, including the panel's export route, so a panel URL pasted against
+// port 8081 still resolves.
+var FPKGiAliasPrefixes = []string{"/api/ps4/fpkgi/", "/ps4/fpkgi/"}
+
 // FPKGiCategories lists the FPKGi CONTENT_URLS categories a PS4 library can
 // fill, in the order the panel offers them.
 var FPKGiCategories = []string{"games", "updates", "dlc"}
@@ -91,9 +96,15 @@ func (s *Service) FPKGiItems(ctx context.Context, category string) ([]fpkgi.Item
 }
 
 // FPKGiHandler serves /fpkgi/ps4/{category}.json and the covers they link to.
+// The FPKGiAliasPrefixes forms, with or without .json, serve the same lists.
 func (s *Service) FPKGiHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, FPKGiPrefix)
+		for _, prefix := range FPKGiAliasPrefixes {
+			if alias, ok := strings.CutPrefix(r.URL.Path, prefix); ok {
+				name = strings.TrimSuffix(alias, ".json") + ".json"
+			}
+		}
 		if strings.HasPrefix(name, "covers/") {
 			id := strings.TrimSuffix(strings.TrimPrefix(name, "covers/"), filepath.Ext(name))
 			path, ok := s.Cover(id)
