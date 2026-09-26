@@ -1,6 +1,7 @@
 package ps4
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,7 @@ func TestFPKGiContentListsServeSinglePackagesByCategory(t *testing.T) {
 	writePKGFixture(t, filepath.Join(root, "Split", "Big_0.pkg"), "EP0002-CUSA54321_00-ABCDEFGHIJKLMNOP", 0x1a, 0x100)
 	writePKGFixture(t, filepath.Join(root, "Split", "Big_1.pkg"), "EP0002-CUSA54321_00-ABCDEFGHIJKLMNOP", 0x1a, 0x100)
 	service := NewService(root, "", "127.0.0.1:0", "http://192.168.1.20:8081", 0, 1, 0, 0, nil)
-	defer service.Queue.Close(t.Context())
+	defer service.Queue.Close(context.Background())
 
 	recorder := httptest.NewRecorder()
 	service.Content.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/fpkgi/ps4/games.json", nil))
@@ -53,21 +54,21 @@ func TestFPKGiContentListsServeSinglePackagesByCategory(t *testing.T) {
 		}
 	}
 
-	items, skipped, err := service.FPKGiItems(t.Context(), "updates")
+	items, skipped, err := service.FPKGiItems(context.Background(), "updates")
 	if err != nil || len(items) != 1 || items[0].Version != "01.05" || skipped != 0 {
 		t.Fatalf("updates: items=%+v skipped=%d err=%v", items, skipped, err)
 	}
-	if _, skipped, _ = service.FPKGiItems(t.Context(), "all"); skipped != 1 {
+	if _, skipped, _ = service.FPKGiItems(context.Background(), "all"); skipped != 1 {
 		t.Fatalf("expected the split package to be skipped once, got %d", skipped)
 	}
-	if _, _, err = service.FPKGiItems(t.Context(), "themes"); err == nil {
+	if _, _, err = service.FPKGiItems(context.Background(), "themes"); err == nil {
 		t.Fatal("expected unknown category error")
 	}
 }
 
 func TestFPKGiRequiresAdvertiseURL(t *testing.T) {
 	service := NewService(t.TempDir(), "", "127.0.0.1:0", "", 0, 1, 0, 0, nil)
-	defer service.Queue.Close(t.Context())
+	defer service.Queue.Close(context.Background())
 	recorder := httptest.NewRecorder()
 	service.Content.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/fpkgi/ps4/games.json", nil))
 	if recorder.Code != http.StatusServiceUnavailable {
