@@ -355,7 +355,7 @@ For example, in `/user/data/FPKGi/config.json`:
 }
 ```
 
-The same files can be downloaded from the panel (links on the PS4 Packages and PS5 Games pages, or `GET /api/ps4/fpkgi/{category}` and `GET /api/ps5/fpkgi`) and copied to `/user/data/FPKGi/ContentJSONs/`; their URLs still point at the package server.
+The package server's index page (`http://HOST_LAN_IP:8081/`) links to these lists, and it also accepts `/ps4/fpkgi/games.json`, `/ps5/fpkgi` and the panel's paths (`/api/ps4/fpkgi/games.json`, `/api/ps5/fpkgi`) as aliases. Any other unknown path returns a 404 listing the correct URLs. The same files can be downloaded from the panel (links on the PS4 Packages and PS5 Games pages, or `GET /api/ps4/fpkgi/{category}` and `GET /api/ps5/fpkgi`) and copied to `/user/data/FPKGi/ContentJSONs/`; their URLs still point at the package server.
 
 - **PS4:** packages are grouped as games, updates, or DLC using the same rules as the PS4 Packages page. License-only packages are omitted, and so are split packages (`_0.pkg`, `_1.pkg`, …) because FPKGi downloads a single file per entry. Region, version, and the cached `icon0` cover are included when known.
 - **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. The title ID and region come from the content ID in the file name or package header, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) becomes its cover. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.

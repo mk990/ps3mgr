@@ -20,6 +20,23 @@ import (
 // list and the files it links to.
 const FPKGiPrefix = "/fpkgi/ps5/"
 
+// FPKGiAliasPaths are other spellings of the PS5 list the package server
+// accepts, including the panel's export route, so a panel URL pasted against
+// port 8081 still resolves.
+var FPKGiAliasPaths = []string{"/api/ps5/fpkgi", "/ps5/fpkgi"}
+
+// fpkgiAlias reports whether path names the PS5 list through an alias, as
+// the bare path, with .json, or as a directory holding ps5.json.
+func fpkgiAlias(path string) bool {
+	for _, alias := range FPKGiAliasPaths {
+		switch path {
+		case alias, alias + ".json", alias + "/", alias + "/ps5.json":
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	contentIDPattern = regexp.MustCompile(`(?i)([A-Z]{2})[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_00-[A-Z0-9]{16}`)
 	pkgVersionRegexp = regexp.MustCompile(`(?i)[._ -]V([0-9]{1,2})[._]?([0-9]{2})(?:[^0-9]|$)`)
@@ -126,9 +143,16 @@ func fpkgiURL(kind, relative string) string {
 
 // FPKGiHandler serves /fpkgi/ps5/ps5.json and the packages and covers it
 // links to. Only .pkg and image files inside the PS5 library are reachable.
+// The FPKGiAliasPaths forms serve the same list.
 func (s *Service) FPKGiHandler(advertise Advertiser) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.EscapedPath(), FPKGiPrefix)
+		if !strings.HasPrefix(r.URL.Path, FPKGiPrefix) {
+			name = ""
+			if fpkgiAlias(r.URL.Path) {
+				name = "ps5.json"
+			}
+		}
 		switch {
 		case name == "ps5.json":
 			items, err := s.FPKGiItems(r.Context(), advertise)

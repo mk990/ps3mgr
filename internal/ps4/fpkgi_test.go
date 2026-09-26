@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,6 +53,22 @@ func TestFPKGiContentListsServeSinglePackagesByCategory(t *testing.T) {
 		if download.Code != http.StatusOK {
 			t.Fatalf("package link not served: %d", download.Code)
 		}
+	}
+
+	// The panel's export path also resolves on the package server.
+	for _, alias := range []string{"/api/ps4/fpkgi/games.json", "/api/ps4/fpkgi/games", "/ps4/fpkgi/games.json"} {
+		aliased := httptest.NewRecorder()
+		service.Content.Handler().ServeHTTP(aliased, httptest.NewRequest(http.MethodGet, alias, nil))
+		if aliased.Code != http.StatusOK || aliased.Body.String() != recorder.Body.String() {
+			t.Fatalf("%s: status %d: %s", alias, aliased.Code, aliased.Body)
+		}
+	}
+
+	// A wrong guess gets the right URLs in the 404 body.
+	missing := httptest.NewRecorder()
+	service.Content.Handler().ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/fpkgi/games.json", nil))
+	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), "/fpkgi/ps4/games.json") {
+		t.Fatalf("unhelpful 404: %d %s", missing.Code, missing.Body)
 	}
 
 	items, skipped, err := service.FPKGiItems(context.Background(), "updates")

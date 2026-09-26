@@ -48,7 +48,20 @@ type indexedPackage struct {
 var packageIndexTemplate = template.Must(template.New("ps4-package-index").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PS4 Package Index</title><style>body{font:16px system-ui,sans-serif;max-width:70rem;margin:auto;padding:1rem;background:#111827;color:#f9fafb}a{color:#93c5fd;overflow-wrap:anywhere}li{margin:.8rem 0}small{color:#9ca3af}</style></head>
-<body><h1>PS4 Package Index</h1><p>{{len .}} package file(s) under the configured PS4 library.</p><ul>{{range .}}<li><a href="{{.URL}}">{{.Name}}</a> <small>{{.Size}}</small></li>{{else}}<li>No .pkg files found.</li>{{end}}</ul></body></html>`))
+<body><h1>PS4 Package Index</h1><p>FPKGi content lists: <a href="/fpkgi/ps4/games.json">games</a> · <a href="/fpkgi/ps4/updates.json">updates</a> · <a href="/fpkgi/ps4/dlc.json">DLC</a> · <a href="/fpkgi/ps5/ps5.json">PS5</a></p><p>{{len .}} package file(s) under the configured PS4 library.</p><ul>{{range .}}<li><a href="{{.URL}}">{{.Name}}</a> <small>{{.Size}}</small></li>{{else}}<li>No .pkg files found.</li>{{end}}</ul></body></html>`))
+
+// unknownPathHelp answers requests for paths the package server does not
+// serve, pointing at the URLs people most often mean.
+const unknownPathHelp = `404 page not found
+
+This is the PS4 package server. It serves:
+  /                         package index
+  /healthz                  health check
+  /fpkgi/ps4/games.json     FPKGi games list
+  /fpkgi/ps4/updates.json   FPKGi updates list
+  /fpkgi/ps4/dlc.json       FPKGi DLC list
+  /fpkgi/ps4/all.json       FPKGi list of every PS4 package
+  /fpkgi/ps5/ps5.json       FPKGi PS5 list`
 
 func NewContentServer(listen, advertiseURL, root string) *ContentServer {
 	return &ContentServer{Listen: listen, AdvertiseURL: strings.TrimRight(advertiseURL, "/"), Root: root, files: make(map[string]servedPackage)}
@@ -149,7 +162,8 @@ func (s *ContentServer) Register(pkg Package) ([]string, func(), error) {
 
 // Mount serves GET and HEAD requests below prefix with handler. It lets other
 // read-only LAN endpoints, such as FPKGi content lists, share the listener the
-// console already reaches. The prefix must start and end with a slash.
+// console already reaches. The prefix must start with a slash; handlers
+// mounted without a trailing slash must reject paths they do not own.
 func (s *ContentServer) Mount(prefix string, handler http.Handler) {
 	s.mu.Lock()
 	s.mounts = append(s.mounts, mountedHandler{prefix: prefix, handler: handler})
@@ -205,6 +219,10 @@ func (s *ContentServer) Handler() http.Handler {
 		}
 		if handler, ok := s.mounted(r.URL.Path); ok {
 			handler.ServeHTTP(w, r)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/ps4-pkg/") {
+			http.Error(w, unknownPathHelp, http.StatusNotFound)
 			return
 		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/ps4-pkg/"), "/")
