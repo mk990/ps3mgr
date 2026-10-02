@@ -129,6 +129,24 @@ func (q *FPKGQueue) Retry(id string) error {
 	return nil
 }
 
+func (q *FPKGQueue) ClearCompleted() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	removed := 0
+	kept := q.order[:0]
+	for _, id := range q.order {
+		item := q.items[id]
+		if item != nil && (item.State == FPKGCompleted || item.State == FPKGCancelled) {
+			delete(q.items, id)
+			removed++
+			continue
+		}
+		kept = append(kept, id)
+	}
+	q.order = kept
+	return removed
+}
+
 func (q *FPKGQueue) Close(ctx context.Context) error {
 	q.mu.Lock()
 	if !q.closed {

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#090d18">
   <title>PlayStation Manager</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -62,7 +63,7 @@
 
       <section id="ps2usb" class="view"><div class="panel-head"><div><p class="eyebrow">OPEN PS2 LOADER TARGETS</p><h3>PS2 USB devices</h3></div><button id="refreshUSB" class="button primary">Refresh devices</button></div><div class="compat-note"><strong>Docker-safe compatibility check</strong><span>The manager inspects mounted filesystems only. Create the MBR partition and format FAT32 on the host, then mount it below the configured USB root.</span></div><div id="usbDiscoveryStatus" class="scan-result">Scanning configured USB root…</div><div id="ps2USBGrid" class="console-grid empty">No PS2 USB devices detected.<br>Make sure the USB filesystem is mounted inside the container.</div></section>
 
-      <section id="ps2queue" class="view"><div class="panel-head"><div><p class="eyebrow">INDEPENDENT PS2 WORKERS</p><h3>Transfer and conversion queues</h3></div><div><button class="button primary goto" data-view="ps2queue">PS2</button><button class="button ghost goto" data-view="queue">PS3</button><button class="button ghost goto" data-view="ps4queue">PS4</button><button class="button ghost goto" data-view="ps5queue">PS5</button></div></div><p class="platform-heading">PS4 FAKE PKG CONVERSIONS</p><div id="ps2FPKGQueueList" class="queue-list empty">The PS2 FPKG queue is empty.</div><p class="platform-heading">OPEN PS2 LOADER / USB</p><div id="ps2QueueList" class="queue-list empty">The PS2 USB queue is empty.</div></section>
+      <section id="ps2queue" class="view"><div class="panel-head"><div><p class="eyebrow">INDEPENDENT PS2 WORKERS</p><h3>Transfer and conversion queues</h3></div><div><button class="button primary goto" data-view="ps2queue">PS2</button><button class="button ghost goto" data-view="queue">PS3</button><button class="button ghost goto" data-view="ps4queue">PS4</button><button class="button ghost goto" data-view="ps5queue">PS5</button><button id="clearPS2Queue" class="button ghost">Clear completed</button></div></div><p class="platform-heading">PS4 FAKE PKG CONVERSIONS</p><div id="ps2FPKGQueueList" class="queue-list empty">The PS2 FPKG queue is empty.</div><p class="platform-heading">OPEN PS2 LOADER / USB</p><div id="ps2QueueList" class="queue-list empty">The PS2 USB queue is empty.</div></section>
 
       <section id="games" class="view">
         <div class="toolbar"><label class="search"><span>⌕</span><input id="gameSearch" placeholder="Search titles or game IDs…"></label><select id="gameFilter"><option value="all">All games</option><option value="installed">Installed</option><option value="missing">Missing</option><option value="queued">Queued</option></select><select id="gameSort"><option value="title">Sort: Title</option><option value="size">Sort: Size</option></select></div>

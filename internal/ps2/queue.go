@@ -143,6 +143,24 @@ func (q *Queue) Retry(id string) error {
 	return nil
 }
 
+func (q *Queue) ClearCompleted() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	removed := 0
+	kept := q.order[:0]
+	for _, id := range q.order {
+		item := q.items[id]
+		if item != nil && (item.State == StateCompleted || item.State == StateCancelled) {
+			delete(q.items, id)
+			removed++
+			continue
+		}
+		kept = append(kept, id)
+	}
+	q.order = kept
+	return removed
+}
+
 func (q *Queue) Close(ctx context.Context) error {
 	q.mu.Lock()
 	if !q.closed {

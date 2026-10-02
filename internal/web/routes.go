@@ -62,6 +62,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps2/queue/{id}", s.ps2QueueItem)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/cancel", s.ps2Cancel)
 	s.mux.HandleFunc("POST /api/ps2/queue/{id}/retry", s.ps2Retry)
+	s.mux.HandleFunc("DELETE /api/ps2/queue/completed", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]int{"removed": s.app.PS2.Queue.ClearCompleted() + s.app.PS2.FPKG.ClearCompleted()})
+	})
 	s.mux.HandleFunc("GET /api/ps2/fpkg/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS2.FPKG.Status()) })
 	s.mux.HandleFunc("POST /api/ps2/fpkg/queue", s.ps2FPKGEnqueue)
 	s.mux.HandleFunc("GET /api/ps2/fpkg/queue", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS2.FPKG.List()) })
@@ -147,5 +150,8 @@ func (s *Server) routes() {
 	for _, path := range []string{"/dashboard", "/ps2-games", "/ps2-usb", "/ps2-queue", "/ps3-games", "/ps3-consoles", "/ps3-scan", "/ps3-queue", "/ps4-games", "/ps4-consoles", "/ps4-scan", "/ps4-queue", "/ps5-games", "/ps5-consoles", "/ps5-scan", "/ps5-queue"} {
 		s.mux.HandleFunc("GET "+path, s.appShell)
 	}
+	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/favicon.svg", http.StatusMovedPermanently)
+	})
 	s.mux.Handle("GET /", http.FileServer(http.FS(content)))
 }
