@@ -330,6 +330,25 @@ func (s *Service) Scan(ctx context.Context, cidr string, workers int) ([]domain.
 	return result, err
 }
 
+// PruneOffline re-probes every known console and forgets the ones that no
+// longer answer, returning their IDs.
+func (s *Service) PruneOffline(ctx context.Context) []string {
+	s.mu.RLock()
+	hosts := make([]string, 0, len(s.consoles))
+	for id := range s.consoles {
+		hosts = append(hosts, id)
+	}
+	s.mu.RUnlock()
+	offline := scanner.Offline(ctx, s.Scanner.Detector, hosts, s.Scanner.DetectionTimeout)
+	s.mu.Lock()
+	for _, id := range offline {
+		delete(s.consoles, id)
+	}
+	s.mu.Unlock()
+	s.publish("ps4.consoles.pruned", map[string]any{"removed": offline})
+	return offline
+}
+
 func (s *Service) AddConsole(ctx context.Context, ip string) (domain.Console, error) {
 	ip, err := validateIP(ip)
 	if err != nil {

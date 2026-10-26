@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -102,5 +103,21 @@ func TestScanBoundsUnreachableHostTime(t *testing.T) {
 	}
 	if len(items) != 0 || time.Since(started) > 100*time.Millisecond {
 		t.Fatalf("bounded scan was too slow: %v", time.Since(started))
+	}
+}
+
+type upDetector map[string]bool
+
+func (f upDetector) Detect(_ context.Context, ip string) (bool, int, error) {
+	if up, ok := f[ip]; ok && up {
+		return true, 1, nil
+	}
+	return false, 0, errors.New("unreachable")
+}
+
+func TestOfflineReturnsUnreachableHosts(t *testing.T) {
+	got := Offline(context.Background(), upDetector{"10.0.0.1": true}, []string{"10.0.0.2", "10.0.0.1", "10.0.0.3"}, time.Second)
+	if len(got) != 2 || got[0] != "10.0.0.2" || got[1] != "10.0.0.3" {
+		t.Fatalf("offline = %v", got)
 	}
 }

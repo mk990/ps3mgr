@@ -61,12 +61,13 @@ func (Library) Scan(ctx context.Context, root string) ([]domain.Game, error) {
 			return nil
 		}
 		format, supported := imageFormats[strings.ToLower(filepath.Ext(entry.Name()))]
-		if !supported || !entry.Type().IsRegular() {
+		if !supported {
 			return nil
 		}
-		fileInfo, err := entry.Info()
-		if err != nil {
-			return err
+		// os.Stat follows symlinks, so linked image files are listed too.
+		fileInfo, err := os.Stat(path)
+		if err != nil || !fileInfo.Mode().IsRegular() {
+			return nil
 		}
 		id := titleID(entry.Name())
 		title := titleFromFilename(entry.Name(), id)

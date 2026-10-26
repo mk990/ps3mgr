@@ -21,6 +21,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/local-games/{id}/icon", s.localIcon)
 	s.mux.HandleFunc("POST /api/scan", s.scan)
 	s.mux.HandleFunc("GET /api/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.Consoles()) })
+	s.mux.HandleFunc("POST /api/consoles/prune", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"removed": s.app.PruneOffline(r.Context()), "consoles": s.app.Consoles()})
+	})
 	s.mux.HandleFunc("POST /api/consoles", s.addConsole)
 	s.mux.HandleFunc("GET /api/consoles/{id}", s.console)
 	s.mux.HandleFunc("GET /api/consoles/{id}/games", s.remoteGames)
@@ -79,6 +82,9 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("POST /api/ps4/scan", s.ps4Scan)
 	s.mux.HandleFunc("GET /api/ps4/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS4.Consoles()) })
+	s.mux.HandleFunc("POST /api/ps4/consoles/prune", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"removed": s.app.PS4.PruneOffline(r.Context()), "consoles": s.app.PS4.Consoles()})
+	})
 	s.mux.HandleFunc("POST /api/ps4/consoles", s.ps4AddConsole)
 	s.mux.HandleFunc("GET /api/ps4/consoles/{id}", s.ps4Console)
 	s.mux.HandleFunc("GET /api/ps4/consoles/{id}/games", s.ps4RemoteGames)
@@ -116,6 +122,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ps5/fpkgi", s.ps5FPKGi)
 	s.mux.HandleFunc("POST /api/ps5/scan", s.ps5Scan)
 	s.mux.HandleFunc("GET /api/ps5/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Consoles()) })
+	s.mux.HandleFunc("POST /api/ps5/consoles/prune", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"removed": s.app.PS5.PruneOffline(r.Context()), "consoles": s.app.PS5.Consoles()})
+	})
 	s.mux.HandleFunc("POST /api/ps5/consoles", s.ps5AddConsole)
 	s.mux.HandleFunc("GET /api/ps5/consoles/{id}", s.ps5Console)
 	s.mux.HandleFunc("GET /api/ps5/consoles/{id}/games", s.ps5RemoteGames)

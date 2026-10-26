@@ -128,3 +128,30 @@ func (s *Scanner) Scan(ctx context.Context, cidr string, found func(domain.Conso
 	sort.Slice(consoles, func(i, j int) bool { return consoles[i].IP < consoles[j].IP })
 	return consoles, nil
 }
+
+// Offline re-probes each host concurrently and returns the ones that no longer
+// answer as a supported console, sorted. A failed or negative probe counts as
+// offline.
+func Offline(ctx context.Context, detector Detector, hosts []string, timeout time.Duration) []string {
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		offline []string
+	)
+	for _, host := range hosts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if detected, _, err := detector.Detect(probeCtx, host); err != nil || !detected {
+				mu.Lock()
+				offline = append(offline, host)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	sort.Strings(offline)
+	return offline
+}

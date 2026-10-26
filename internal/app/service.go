@@ -158,6 +158,25 @@ func (s *Service) Consoles() []domain.Console {
 	return result
 }
 
+// PruneOffline re-probes every known console and forgets the ones that no
+// longer answer, returning their IDs.
+func (s *Service) PruneOffline(ctx context.Context) []string {
+	s.mu.RLock()
+	hosts := make([]string, 0, len(s.consoles))
+	for id := range s.consoles {
+		hosts = append(hosts, id)
+	}
+	s.mu.RUnlock()
+	offline := scanner.Offline(ctx, s.Scanner.Detector, hosts, s.Scanner.DetectionTimeout)
+	s.mu.Lock()
+	for _, id := range offline {
+		delete(s.consoles, id)
+	}
+	s.mu.Unlock()
+	s.Events.Publish("consoles.pruned", map[string]any{"removed": offline})
+	return offline
+}
+
 func (s *Service) Console(id string) (domain.Console, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

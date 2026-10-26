@@ -133,3 +133,21 @@ func TestValidateIPRejectsPublicAndMalformedAddresses(t *testing.T) {
 		t.Fatalf("private IP = %q, %v", got, err)
 	}
 }
+
+func TestScanListsSymlinkedImages(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "Linked PPSA01325.ffpfsc")
+	if err := os.WriteFile(target, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "Linked PPSA01325.ffpfsc")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	result, err := (Library{}).Scan(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].Format != "ffpfsc" || result[0].Size != 5 {
+		t.Fatalf("symlinked image not listed: %#v", result)
+	}
+}
