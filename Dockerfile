@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
       -o /out/ps3mgr \
       ./cmd/ps3mgr
 
-FROM python:3.13-slim-bookworm
+FROM python:3.15-slim-bookworm
 RUN apt-get update \
     && apt-get install -y --no-install-recommends makefs \
     && rm -rf /var/lib/apt/lists/* \
