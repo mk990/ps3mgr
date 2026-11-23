@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"ps3mgr/internal/app"
 	"ps3mgr/internal/config"
+	"ps3mgr/internal/domain"
 )
 
 type webDetector struct{}
@@ -407,6 +409,57 @@ func TestFPKGiExportsDownloadAndShareThePackageServer(t *testing.T) {
 		application.PS4.Content.Handler().ServeHTTP(live, httptest.NewRequest(http.MethodGet, path, nil))
 		if live.Code != want {
 			t.Fatalf("package server %s = %d, want %d: %s", path, live.Code, want, live.Body.String())
+		}
+	}
+}
+
+func TestPS5BatchConversionRemainsQueuedAfterRequestEnds(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"First", "Second"} {
+		dir := filepath.Join(root, name, "sce_sys")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "param.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	application := app.New(config.Config{PS5GameDir: root})
+	defer application.Close(context.Background())
+	handler := New(application).Handler()
+	queue := application.PS5.Conversions
+	queue.Pause()
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		r := httptest.NewRequest(http.MethodPost, "/api/ps5/convert", strings.NewReader(body)).WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if w := post(`{"game_ids":["First","missing"],"format":"exfat"}`); w.Code != http.StatusBadRequest || len(queue.List()) != 0 {
+		t.Fatalf("invalid batch: %d, queue %+v", w.Code, queue.List())
+	}
+	batch := `{"game_ids":["Second","First","First"],"format":"EXFAT"}`
+	if w := post(batch); w.Code != http.StatusAccepted {
+		t.Fatalf("submit: %d %s", w.Code, w.Body.String())
+	}
+	if w := post(batch); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate: %d", w.Code)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ps5/queue", nil))
+	var jobs []domain.Transfer
+	if err := json.Unmarshal(w.Body.Bytes(), &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[0].Game.Title != "Second" || jobs[1].Game.Title != "First" {
+		t.Fatalf("queued selection: %+v", jobs)
+	}
+	for _, job := range jobs {
+		if job.State != domain.QueueWaiting || job.OutputFormat != "exfat" || job.Direction != domain.TransferConversion {
+			t.Fatalf("queued job: %+v", job)
 		}
 	}
 }

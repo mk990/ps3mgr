@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ps3mgr/internal/fpkgi"
+	"ps3mgr/internal/transfers"
 )
 
 func (s *Server) ps5Games(w http.ResponseWriter, r *http.Request) {
@@ -19,11 +20,25 @@ func (s *Server) ps5Games(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ps5Convert(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		GameID string `json:"game_id"`
-		Format string `json:"format"`
+		GameID  string   `json:"game_id"`
+		GameIDs []string `json:"game_ids"`
+		Format  string   `json:"format"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if request.GameIDs != nil {
+		if request.GameID != "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("choose game_ids or game_id"))
+			return
+		}
+		items, err := s.app.PS5.EnqueueConversions(r.Context(), request.GameIDs, request.Format)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, items)
 		return
 	}
 	name, err := s.app.PS5.ConvertFolder(r.Context(), request.GameID, request.Format)
@@ -141,40 +156,45 @@ func (s *Server) ps5Enqueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, items)
 }
 
-func (s *Server) ps5QueueItem(w http.ResponseWriter, r *http.Request) {
-	item, ok := s.app.PS5.Transfers.Get(r.PathValue("id"))
-	if !ok {
-		item, ok = s.app.PS5.Pulls.Get(r.PathValue("id"))
+func (s *Server) ps5JobManager(id string) (*transfers.Manager, bool) {
+	for _, manager := range []*transfers.Manager{s.app.PS5.Transfers, s.app.PS5.Pulls, s.app.PS5.Conversions} {
+		if _, ok := manager.Get(id); ok {
+			return manager, true
+		}
 	}
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("PS5 transfer not found"))
+	return nil, false
+}
+
+func (s *Server) ps5QueueItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if manager, found := s.ps5JobManager(id); found {
+		if item, ok := manager.Get(id); ok {
+			writeJSON(w, http.StatusOK, item)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, fmt.Errorf("PS5 job not found"))
+}
+
+func (s *Server) ps5QueueAction(w http.ResponseWriter, r *http.Request, action func(*transfers.Manager, string) error) {
+	id := r.PathValue("id")
+	manager, found := s.ps5JobManager(id)
+	if !found {
+		writeError(w, http.StatusNotFound, fmt.Errorf("PS5 job not found"))
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	if err := action(manager, id); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) ps5Cancel(w http.ResponseWriter, r *http.Request) {
-	err := s.app.PS5.Transfers.Cancel(r.PathValue("id"))
-	if err != nil {
-		err = s.app.PS5.Pulls.Cancel(r.PathValue("id"))
-	}
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.ps5QueueAction(w, r, (*transfers.Manager).Cancel)
 }
-
 func (s *Server) ps5Retry(w http.ResponseWriter, r *http.Request) {
-	err := s.app.PS5.Transfers.Retry(r.PathValue("id"))
-	if err != nil {
-		err = s.app.PS5.Pulls.Retry(r.PathValue("id"))
-	}
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.ps5QueueAction(w, r, (*transfers.Manager).Retry)
 }
 
 func (s *Server) ps5Pull(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package ps5
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -23,14 +24,15 @@ type Publisher interface {
 // Service owns all PS5/ShadowMountPlus state. Its queue is deliberately
 // independent from both the PS2 and PS3 workers.
 type Service struct {
-	GameDir   string
-	RemoteDir string
-	Library   Library
-	FTP       *FTP
-	Scanner   *scanner.Scanner
-	Transfers *transfers.Manager
-	Pulls     *transfers.Manager
-	events    Publisher
+	GameDir     string
+	RemoteDir   string
+	Library     Library
+	FTP         *FTP
+	Scanner     *scanner.Scanner
+	Transfers   *transfers.Manager
+	Pulls       *transfers.Manager
+	Conversions *transfers.Manager
+	events      Publisher
 
 	mu       sync.RWMutex
 	local    []domain.Game
@@ -54,13 +56,15 @@ func NewService(gameDir, remoteDir, user, password string, port, workers int, sc
 		ftpTimeout = 8 * time.Second
 	}
 	ftpService := NewFTP(user, password, ftpTimeout, port, remoteDir)
-	return &Service{
+	s := &Service{
 		GameDir: gameDir, RemoteDir: remoteDir, FTP: ftpService, events: events,
 		Scanner:   &scanner.Scanner{Detector: ftpService, Workers: workers, Timeout: scanTimeout, DetectionTimeout: ftpTimeout, Port: fmt.Sprint(port)},
 		Transfers: transfers.NewPlatform(ftpService, events, remoteDir, domain.PlatformPS5),
 		Pulls:     transfers.NewDownload(ftpService, events, gameDir, domain.PlatformPS5),
 		consoles:  make(map[string]domain.Console),
 	}
+	s.Conversions = transfers.NewConversion(s.buildImage, events, domain.PlatformPS5)
+	return s
 }
 
 func (s *Service) LocalGames(ctx context.Context, override string) ([]domain.Game, error) {
@@ -296,10 +300,7 @@ func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []s
 }
 
 func (s *Service) Close(ctx context.Context) error {
-	if err := s.Transfers.Close(ctx); err != nil {
-		return err
-	}
-	return s.Pulls.Close(ctx)
+	return errors.Join(s.Conversions.Close(ctx), s.Transfers.Close(ctx), s.Pulls.Close(ctx))
 }
 
 func (s *Service) publish(eventType string, payload any) {

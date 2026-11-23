@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func (r Runner) ps5(ctx context.Context, application *app.Service, args []string
 
 Usage:
   ps3mgr ps5 local-games [--dir PATH] [--json]
-  ps3mgr ps5 convert --format exfat|ffpkg|ffpfsc GAME
+  ps3mgr ps5 convert --format exfat|ffpkg|ffpfsc GAME...
   ps3mgr ps5 scan CIDR [--workers N] [--json]
   ps3mgr ps5 consoles [--json]
   ps3mgr ps5 add-console --ip IP [--json]
@@ -42,14 +43,32 @@ an arbitrary remote destination path.
 		if err := set.Parse(args[1:]); err != nil {
 			return err
 		}
-		if set.NArg() != 1 {
-			return fmt.Errorf("select one PS5 game folder by title, ID, or library_id")
+		jobs, err := application.PS5.EnqueueConversions(ctx, set.Args(), *format)
+		if err != nil {
+			return err
 		}
-		name, err := application.PS5.ConvertFolder(ctx, set.Arg(0), *format)
-		if err == nil {
-			fmt.Fprintln(r.Out, "Created", name)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		var failures []error
+		for _, job := range jobs {
+			for {
+				current, _ := application.PS5.Conversions.Get(job.ID)
+				if current.State == domain.QueueCompleted {
+					fmt.Fprintln(r.Out, "Created", current.Filename)
+					break
+				}
+				if current.State == domain.QueueFailed || current.State == domain.QueueCancelled {
+					failures = append(failures, fmt.Errorf("%s: %s", current.Game.Title, current.Error))
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+				}
+			}
 		}
-		return err
+		return errors.Join(failures...)
 	case "scan":
 		return r.ps5Scan(ctx, application, args[1:])
 	case "consoles":

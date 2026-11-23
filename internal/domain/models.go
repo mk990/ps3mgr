@@ -54,14 +54,16 @@ type QueueState string
 type TransferDirection string
 
 const (
-	TransferUpload   TransferDirection = "upload"
-	TransferDownload TransferDirection = "download"
+	TransferUpload     TransferDirection = "upload"
+	TransferDownload   TransferDirection = "download"
+	TransferConversion TransferDirection = "conversion"
 )
 
 const (
 	QueueWaiting      QueueState = "WAITING"
 	QueueStarting     QueueState = "STARTING"
 	QueueTransferring QueueState = "TRANSFERRING"
+	QueueConverting   QueueState = "CONVERTING"
 	QueueVerifying    QueueState = "VERIFYING"
 	QueueCompleted    QueueState = "COMPLETED"
 	QueueFailed       QueueState = "FAILED"
@@ -76,6 +78,8 @@ type Transfer struct {
 	ConsoleIP        string            `json:"console_ip"`
 	Game             Game              `json:"game"`
 	State            QueueState        `json:"state"`
+	OutputFormat     string            `json:"output_format,omitempty"`
+	Filename         string            `json:"filename,omitempty"`
 	CurrentFile      string            `json:"current_file,omitempty"`
 	BytesTransferred int64             `json:"bytes_transferred"`
 	TotalBytes       int64             `json:"total_bytes"`

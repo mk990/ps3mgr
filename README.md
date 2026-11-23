@@ -335,15 +335,17 @@ Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` 
 
 ### Convert a PS5 folder to an image
 
-On **PS5 Games**, select a local folder, choose **exFAT**, **FFPKG** (UFS2), or **FFPFSC** (compressed exFAT), then click **Convert selected folder**. Keep the page open until the conversion finishes. The image appears beside the source folder and can be selected separately for upload. Existing images are preserved.
+On **PS5 Games**, select one or more local game folders, choose **exFAT**, **FFPKG** (UFS2), or **FFPFSC** (compressed exFAT), then click **Queue conversions**. The server builds one image at a time and continues when you close the browser. Open **PS5 Queue** to check results, cancel a job, or retry it. Each completed image appears beside its source folder in the library. The queue lasts for the current server session.
 
-The same operation is available from the CLI using a title, title ID, or the `library_id` from `ps3mgr ps5 local-games --json`.
+The CLI runs its own queue and waits for all selected folders to finish. Supply titles, title IDs, or the `library_id` values from `ps3mgr ps5 local-games --json`.
 
 ```sh
-ps3mgr ps5 convert --format exfat PPSA12345
+ps3mgr ps5 convert --format exfat PPSA12345 PPSA67890
 ps3mgr ps5 convert --format ffpkg PPSA12345
 ps3mgr ps5 convert --format ffpfsc PPSA12345
 ```
+
+For queued API requests, send `{"game_ids":["LIBRARY_ID"],"format":"exfat"}` to `POST /api/ps5/convert`. The response is HTTP 202 with the queued jobs. Read their states and output filenames from `GET /api/ps5/queue`. The existing single-folder `game_id` request still returns the filename when the build finishes.
 
 The Docker image includes the builders. For a standalone installation, place [MkPFS 1.1.0](https://github.com/PSBrew/MkPFS) on `PATH` for exFAT and FFPFSC. For FFPKG, install the BSD `makefs` utility or the [UFS2Tool CLI](https://github.com/SvenGDK/UFS2Tool). Conversion writes ordinary image files as the current user.
 

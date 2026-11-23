@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,18 +21,22 @@ type Downloader interface {
 	DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(ps3ftp.Progress)) error
 }
 
+type ConvertFunc func(ctx context.Context, game domain.Game, format string) (filename string, err error)
+
 type Publisher interface {
 	Publish(eventType string, payload any)
 }
 
 type Options struct {
-	StopOnError bool
+	StopOnError  bool
+	OutputFormat string
 }
 
 type Manager struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
 	uploader    Uploader
+	convert     ConvertFunc
 	downloader  Downloader
 	localRoot   string
 	events      Publisher
@@ -69,6 +74,13 @@ func NewDownload(downloader Downloader, publisher Publisher, localRoot string, p
 	return m
 }
 
+func NewConversion(convert ConvertFunc, publisher Publisher, platform domain.Platform) *Manager {
+	m := newManager(nil, publisher, "", platform, string(platform)+".conversion")
+	m.convert = convert
+	m.direction = domain.TransferConversion
+	return m
+}
+
 func newManager(uploader Uploader, publisher Publisher, remoteRoot string, platform domain.Platform, eventPrefix string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
@@ -93,11 +105,18 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 	if m.closed {
 		return nil, fmt.Errorf("transfer manager is shutting down")
 	}
+	if m.convert != nil {
+		for _, game := range games {
+			if m.conversionPending(game, options.OutputFormat) {
+				return nil, fmt.Errorf("%s is already queued for %s conversion", game.Title, options.OutputFormat)
+			}
+		}
+	}
 	m.stopOnError[queueID] = options.StopOnError
 	created := make([]domain.Transfer, 0, len(games))
 	for _, game := range games {
 		item := &domain.Transfer{
-			ID: m.id("transfer"), QueueID: queueID, ConsoleIP: consoleIP,
+			OutputFormat: options.OutputFormat, ID: m.id("transfer"), QueueID: queueID, ConsoleIP: consoleIP,
 			Game: game, Platform: m.platform, Direction: m.direction, State: domain.QueueWaiting, TotalBytes: game.Size, CreatedAt: now,
 		}
 		m.items[item.ID] = item
@@ -108,6 +127,17 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 	m.cond.Broadcast()
 	m.publish("queue.created", map[string]any{"queue_id": queueID, "platform": m.platform, "items": created})
 	return created, nil
+}
+
+// conversionPending is called with the queue lock held.
+func (m *Manager) conversionPending(game domain.Game, format string) bool {
+	for _, item := range m.items {
+		if item.Game.LibraryID == game.LibraryID && item.OutputFormat == format &&
+			(item.State == domain.QueueWaiting || item.State == domain.QueueStarting || item.State == domain.QueueConverting) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) List() []domain.Transfer {
@@ -145,7 +175,7 @@ func (m *Manager) Cancel(id string) error {
 		now := time.Now()
 		item.FinishedAt = &now
 		m.publish("queue.item_cancelled", *item)
-	case domain.QueueStarting, domain.QueueTransferring, domain.QueueVerifying:
+	case domain.QueueConverting, domain.QueueStarting, domain.QueueTransferring, domain.QueueVerifying:
 		if m.activeID == id && m.activeStop != nil {
 			m.activeStop()
 		}
@@ -165,6 +195,11 @@ func (m *Manager) Retry(id string) error {
 	if item.State != domain.QueueFailed && item.State != domain.QueueCancelled {
 		return fmt.Errorf("only failed or cancelled transfers can be retried")
 	}
+	if m.convert != nil && m.conversionPending(item.Game, item.OutputFormat) {
+		return fmt.Errorf("%s is already queued for %s conversion", item.Game.Title, item.OutputFormat)
+	}
+	// A cancelled waiting job may still have an earlier slot in the FIFO.
+	m.pending = slices.DeleteFunc(m.pending, func(pending string) bool { return pending == id })
 	item.State = domain.QueueWaiting
 	item.Error = ""
 	item.BytesTransferred = 0
@@ -249,6 +284,9 @@ func (m *Manager) run() {
 		ctx, cancel := context.WithCancel(m.rootCtx)
 		m.activeID, m.activeStop = id, cancel
 		item.State = domain.QueueStarting
+		if m.convert != nil {
+			item.State = domain.QueueConverting
+		}
 		item.Attempts++
 		now := time.Now()
 		item.StartedAt = &now
@@ -274,6 +312,47 @@ func (m *Manager) run() {
 }
 
 func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
+	var filename string
+	var err error
+	if m.convert != nil {
+		filename, err = m.convert(ctx, item.Game, item.OutputFormat)
+	} else {
+		err = m.transfer(ctx, item)
+	}
+	if err != nil {
+		m.mu.Lock()
+		value := m.items[item.ID]
+		now := time.Now()
+		value.FinishedAt = &now
+		if errors.Is(err, context.Canceled) {
+			value.State = domain.QueueCancelled
+			value.Error = err.Error()
+			if m.convert == nil {
+				value.Error = "transfer cancelled"
+			}
+		} else {
+			value.State = domain.QueueFailed
+			value.Error = err.Error()
+		}
+		snapshot := *value
+		m.mu.Unlock()
+		if snapshot.State == domain.QueueCancelled {
+			m.publish("queue.item_cancelled", snapshot)
+		} else {
+			m.publish("queue.item_failed", snapshot)
+		}
+		return
+	}
+	m.mu.Lock()
+	now := time.Now()
+	item.State, item.FinishedAt = domain.QueueCompleted, &now
+	item.Filename, item.Percentage = filename, 100
+	snapshot := *item
+	m.mu.Unlock()
+	m.publish("queue.item_completed", snapshot)
+}
+
+func (m *Manager) transfer(ctx context.Context, item *domain.Transfer) error {
 	m.update(item.ID, func(value *domain.Transfer) { value.State = domain.QueueTransferring })
 	started := time.Now()
 	var lastProgressEvent time.Time
@@ -324,43 +403,17 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 	} else {
 		err = m.uploader.UploadGame(ctx, item.ConsoleIP, item.Game, m.remoteRoot, progressFn)
 	}
-	if err != nil {
-		m.mu.Lock()
-		value := m.items[item.ID]
-		now := time.Now()
-		value.FinishedAt = &now
-		if errors.Is(err, context.Canceled) {
-			value.State = domain.QueueCancelled
-			value.Error = "transfer cancelled"
-		} else {
-			value.State = domain.QueueFailed
-			value.Error = err.Error()
-		}
-		snapshot := *value
-		m.mu.Unlock()
-		if snapshot.State == domain.QueueCancelled {
-			m.publish("queue.item_cancelled", snapshot)
-		} else {
-			m.publish("queue.item_failed", snapshot)
-		}
-		return
+	if err == nil {
+		m.update(item.ID, func(value *domain.Transfer) {
+			value.State, value.Percentage = domain.QueueVerifying, 100
+			if value.TotalBytes <= 0 {
+				value.TotalBytes = value.BytesTransferred
+			} else {
+				value.BytesTransferred = value.TotalBytes
+			}
+		})
 	}
-	m.update(item.ID, func(value *domain.Transfer) {
-		value.State = domain.QueueVerifying
-		value.Percentage = 100
-		if value.TotalBytes <= 0 {
-			value.TotalBytes = value.BytesTransferred
-		} else {
-			value.BytesTransferred = value.TotalBytes
-		}
-	})
-	// FTP size checks happen per file during resumable transfers; reaching this point verifies every file completed.
-	m.update(item.ID, func(value *domain.Transfer) {
-		now := time.Now()
-		value.State = domain.QueueCompleted
-		value.FinishedAt = &now
-	})
-	m.publish("queue.item_completed", m.snapshot(item.ID))
+	return err
 }
 
 func (m *Manager) update(id string, fn func(*domain.Transfer)) {
@@ -382,7 +435,7 @@ func (m *Manager) snapshot(id string) domain.Transfer {
 
 func (m *Manager) queueFinishedLocked(queueID string) bool {
 	for _, item := range m.items {
-		if item.QueueID == queueID && (item.State == domain.QueueWaiting || item.State == domain.QueueStarting || item.State == domain.QueueTransferring || item.State == domain.QueueVerifying) {
+		if item.QueueID == queueID && (item.State == domain.QueueWaiting || item.State == domain.QueueStarting || item.State == domain.QueueTransferring || item.State == domain.QueueVerifying || item.State == domain.QueueConverting) {
 			return false
 		}
 	}

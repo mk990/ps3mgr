@@ -140,7 +140,8 @@ func (s *Server) routes() {
 		writeJSON(w, http.StatusOK, managerList(s.app.PS5.Pulls))
 	})
 	s.mux.HandleFunc("GET /api/ps5/queue", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, append(managerList(s.app.PS5.Transfers), managerList(s.app.PS5.Pulls)...))
+		items := append(managerList(s.app.PS5.Transfers), managerList(s.app.PS5.Pulls)...)
+		writeJSON(w, http.StatusOK, append(items, managerList(s.app.PS5.Conversions)...))
 	})
 	s.mux.HandleFunc("GET /api/ps5/queue/{id}", s.ps5QueueItem)
 	s.mux.HandleFunc("POST /api/ps5/queue/{id}/cancel", s.ps5Cancel)
@@ -148,15 +149,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/ps5/queue/pause", func(w http.ResponseWriter, _ *http.Request) {
 		s.app.PS5.Transfers.Pause()
 		s.app.PS5.Pulls.Pause()
+		s.app.PS5.Conversions.Pause()
 		writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
 	})
 	s.mux.HandleFunc("POST /api/ps5/queue/resume", func(w http.ResponseWriter, _ *http.Request) {
 		s.app.PS5.Transfers.Resume()
 		s.app.PS5.Pulls.Resume()
+		s.app.PS5.Conversions.Resume()
 		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
 	})
 	s.mux.HandleFunc("DELETE /api/ps5/queue/completed", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]int{"removed": s.app.PS5.Transfers.ClearCompleted() + s.app.PS5.Pulls.ClearCompleted()})
+		writeJSON(w, http.StatusOK, map[string]int{"removed": s.app.PS5.Transfers.ClearCompleted() + s.app.PS5.Pulls.ClearCompleted() + s.app.PS5.Conversions.ClearCompleted()})
 	})
 	s.mux.HandleFunc("GET /api/events", s.events)
 	content, _ := fs.Sub(assets, "webui")

@@ -12,39 +12,99 @@ import (
 
 	"ps3mgr/internal/domain"
 	"ps3mgr/internal/games"
+	"ps3mgr/internal/transfers"
 )
 
 // ConvertFolder builds an image beside a discovered local game folder.
 func (s *Service) ConvertFolder(ctx context.Context, wanted, format string) (string, error) {
+	folders, format, err := s.conversionFolders(ctx, []string{wanted}, format)
+	if err != nil {
+		return "", err
+	}
+	return s.buildImage(ctx, folders[0], format)
+}
+
+// EnqueueConversions resolves the entire selection before submitting any jobs.
+func (s *Service) EnqueueConversions(ctx context.Context, wanted []string, format string) ([]domain.Transfer, error) {
+	folders, format, err := s.conversionFolders(ctx, wanted, format)
+	if err != nil {
+		return nil, err
+	}
+	return s.Conversions.Enqueue(folders, "", transfers.Options{OutputFormat: format})
+}
+
+func (s *Service) conversionFolders(ctx context.Context, wanted []string, format string) ([]domain.Game, string, error) {
 	format = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(format), "."))
 	switch format {
 	case "exfat", "ffpkg", "ffpfsc":
 	default:
-		return "", fmt.Errorf("choose exfat, ffpkg, or ffpfsc")
+		return nil, "", fmt.Errorf("choose exfat, ffpkg, or ffpfsc")
 	}
+	if len(wanted) == 0 {
+		return nil, "", fmt.Errorf("select at least one PS5 game folder")
+	}
+	root, err := filepath.Abs(s.GameDir)
+	if err != nil {
+		return nil, "", err
+	}
+	items, err := s.Library.Scan(ctx, root)
+	if err != nil {
+		return nil, "", err
+	}
+	selected := make([]domain.Game, 0, len(wanted))
+	seen := make(map[string]bool)
+	for _, id := range wanted {
+		var folder domain.Game
+		for _, game := range items {
+			if game.Format != "folder" || id == "" {
+				continue
+			}
+			if id != game.LibraryID && id != filepath.Base(game.LocalPath) && !strings.EqualFold(id, games.PublicID(game)) && !strings.EqualFold(id, game.Title) {
+				continue
+			}
+			if folder.LocalPath != "" {
+				return nil, "", fmt.Errorf("multiple folders match %q; select a library_id from ps5 local-games --json", id)
+			}
+			folder = game
+		}
+		if folder.LocalPath == "" {
+			return nil, "", fmt.Errorf("local PS5 folder %q not found", id)
+		}
+		if !seen[folder.LibraryID] {
+			selected = append(selected, folder)
+			seen[folder.LibraryID] = true
+		}
+	}
+	return selected, format, nil
+}
+
+func (s *Service) buildImage(ctx context.Context, folder domain.Game, format string) (string, error) {
+	// A queued folder or its parent could have been moved or replaced since discovery.
 	root, err := filepath.Abs(s.GameDir)
 	if err != nil {
 		return "", err
 	}
-	items, err := s.Library.Scan(ctx, root)
+	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
 	}
-	var folder domain.Game
-	for _, game := range items {
-		if game.Format != "folder" || wanted == "" {
-			continue
-		}
-		if wanted != game.LibraryID && wanted != filepath.Base(game.LocalPath) && !strings.EqualFold(wanted, games.PublicID(game)) && !strings.EqualFold(wanted, game.Title) {
-			continue
-		}
-		if folder.LocalPath != "" {
-			return "", fmt.Errorf("multiple folders match %q; select a library_id from ps5 local-games --json", wanted)
-		}
-		folder = game
+	relative, err := filepath.Rel(root, folder.LocalPath)
+	if err != nil || !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("invalid PS5 folder location")
 	}
-	if folder.LocalPath == "" {
-		return "", fmt.Errorf("local PS5 folder %q not found", wanted)
+	realFolder, err := filepath.EvalSymlinks(folder.LocalPath)
+	if err != nil {
+		return "", err
+	}
+	if realFolder != filepath.Join(realRoot, relative) {
+		return "", fmt.Errorf("PS5 folder location changed after discovery")
+	}
+	info, err := os.Stat(filepath.Join(realFolder, "sce_sys", "param.json"))
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("missing PS5 game metadata")
 	}
 	output := folder.LocalPath + "." + format
 	if err := requireNewImage(output); err != nil {
@@ -84,7 +144,7 @@ func (s *Service) ConvertFolder(ctx context.Context, wanted, format string) (str
 		}
 		return "", fmt.Errorf("build %s: %w: %s", format, err, strings.TrimSpace(string(log)))
 	}
-	info, err := os.Lstat(staged)
+	info, err = os.Lstat(staged)
 	if err != nil {
 		return "", fmt.Errorf("locate built image: %w", err)
 	}
