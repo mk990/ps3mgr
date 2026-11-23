@@ -3,8 +3,12 @@ package ps5
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net"
+	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,8 +82,14 @@ func (f *FTP) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error)
 		return nil, fmt.Errorf("list ShadowMountPlus games: %w", err)
 	}
 	result := make([]domain.Game, 0, len(names))
+	artwork := make(map[string]string)
 	for _, name := range names {
-		if strings.EqualFold(name, "backports") {
+		if isAvatarFile(name) {
+			artwork[strings.ToLower(name)] = name
+		}
+	}
+	for _, name := range names {
+		if strings.EqualFold(name, "backports") || isAvatarFile(name) {
 			continue
 		}
 		format := imageFormats[strings.ToLower(path.Ext(name))]
@@ -100,10 +110,20 @@ func (f *FTP) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error)
 				}
 			}
 		}
-		result = append(result, domain.Game{
+		game := domain.Game{
 			ID: id, Title: title, Format: format,
 			RemotePath: path.Join(f.RemoteRoot, name), Installed: true, State: domain.StateInstalled,
-		})
+		}
+		if format != "folder" {
+			stem := strings.TrimSuffix(name, path.Ext(name))
+			for _, extension := range coverExtensions {
+				if icon := artwork[strings.ToLower(stem+extension)]; icon != "" {
+					game.IconPath = path.Join(f.RemoteRoot, icon)
+					break
+				}
+			}
+		}
+		result = append(result, game)
 	}
 	sort.Slice(result, func(i, j int) bool { return strings.ToLower(result[i].Title) < strings.ToLower(result[j].Title) })
 	return result, nil
@@ -114,7 +134,114 @@ func (f *FTP) UploadGame(ctx context.Context, ip string, game domain.Game, remot
 }
 
 func (f *FTP) DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(psftp.Progress)) error {
-	return f.uploader.DownloadGame(ctx, ip, game, localRoot, progress)
+	if game.Format == "folder" || imageFormats[strings.ToLower(path.Ext(game.RemotePath))] == "" {
+		return f.uploader.DownloadGame(ctx, ip, game, localRoot, progress)
+	}
+	name := psftp.DownloadName(domain.Game{Title: path.Base(game.RemotePath)})
+	if !filepath.IsLocal(name) {
+		return fmt.Errorf("invalid PS5 image filename %q", name)
+	}
+	if err := f.uploader.DownloadFile(ctx, ip, game.RemotePath, filepath.Join(localRoot, name), progress); err != nil {
+		return err
+	}
+	f.pullAvatar(ctx, ip, game, localRoot, name)
+	return ctx.Err()
+}
+
+func isAvatarFile(name string) bool {
+	for _, extension := range coverExtensions {
+		if strings.EqualFold(path.Ext(name), extension) {
+			return true
+		}
+	}
+	return false
+}
+
+// Artwork is optional. Preserve a completed game when the console has no icon.
+func (f *FTP) pullAvatar(ctx context.Context, ip string, game domain.Game, root, name string) {
+	if imageAvatarURL(ctx, root, name) != "" {
+		return
+	}
+	var sources []string
+	if game.IconPath != "" {
+		sources = append(sources, game.IconPath)
+	}
+	if id := titleID(game.ID); id != "" {
+		sources = append(sources, path.Join("/user/appmeta", id, "icon0.png"))
+	}
+	switch game.Format {
+	case "ffpkg", "exfat", "ffpfs":
+		sources = append(sources, mountedIcon(game.RemotePath))
+	}
+	if len(sources) == 0 && game.Format != "ffpfsc" {
+		return
+	}
+	client, err := f.connect(ctx, ip)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	data, ext := readAvatar(ctx, client, sources)
+	if data == nil && game.Format == "ffpfsc" {
+		// ShadowMountPlus mounts the container first, then mounts its inner
+		// image separately. The game artwork lives on that second mount.
+		container := imageMount("/mnt/shadowmnt/pfsc", game.RemotePath)
+		names, err := client.Names(ctx, container)
+		if err != nil {
+			return
+		}
+		var nested []string
+		for _, name := range names {
+			ext := strings.ToLower(path.Ext(name))
+			if strings.EqualFold(name, "pfs_image.dat") || ext == ".ffpfs" || ext == ".ffpkg" || ext == ".exfat" {
+				nested = append(nested, mountedIcon(path.Join(container, name)))
+			}
+		}
+		data, ext = readAvatar(ctx, client, nested)
+	}
+	if data == nil {
+		return
+	}
+	icon, err := os.CreateTemp(root, ".ps5-avatar-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(icon.Name())
+	_, writeErr := icon.Write(data)
+	if closeErr := icon.Close(); writeErr == nil && closeErr == nil {
+		_ = os.Rename(icon.Name(), filepath.Join(root, strings.TrimSuffix(name, filepath.Ext(name))+ext))
+	}
+}
+
+func mountedIcon(source string) string {
+	return path.Join(imageMount("/mnt/shadowmnt", source), "sce_sys/icon0.png")
+}
+
+func imageMount(root, source string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(source))
+	filename := path.Base(source)
+	stem := strings.TrimSuffix(filename, path.Ext(filename))
+	// ShadowMountPlus fits the full path and terminating NUL into the
+	// PS5 statfs mount-name field (88 bytes), preserving the hash suffix.
+	stem = stem[:min(len(stem), 88-len(root)-11)]
+	return path.Join(root, fmt.Sprintf("%s_%08x", stem, hash.Sum32()))
+}
+
+func readAvatar(ctx context.Context, client *psftp.Client, sources []string) ([]byte, string) {
+	for _, source := range sources {
+		data, err := client.ReadFile(ctx, source, 20<<20)
+		if err != nil {
+			continue
+		}
+		switch http.DetectContentType(data) {
+		case "image/png":
+			return data, ".png"
+		case "image/jpeg":
+			return data, ".jpg"
+		}
+	}
+	return nil, ""
 }
 
 func containsFold(values []string, wanted string) bool {

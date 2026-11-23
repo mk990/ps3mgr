@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"ps3mgr/internal/fpkgi"
+	"ps3mgr/internal/pkgicon"
 )
 
 // FPKGiPrefix is where the package server publishes the PS5 FPKGi content
@@ -49,7 +50,7 @@ type Advertiser func() (string, error)
 
 // FPKGiItems lists the installable .pkg files below the PS5 library. FPKGi
 // installs packages only, so ShadowMountPlus folders and images are not part
-// of the list. A cover is any image beside the package with the same base name.
+// of the list. Covers come from same-name artwork or the embedded icon0.
 func (s *Service) FPKGiItems(ctx context.Context, advertise Advertiser) ([]fpkgi.Item, error) {
 	base, err := advertise()
 	if err != nil {
@@ -81,7 +82,7 @@ func (s *Service) FPKGiItems(ctx context.Context, advertise Advertiser) ([]fpkgi
 		if err != nil {
 			return err
 		}
-		items = append(items, pkgItem(base, root, relative, info.Size()))
+		items = append(items, pkgItem(ctx, base, root, relative, info.Size()))
 		return nil
 	})
 	if err != nil {
@@ -91,7 +92,7 @@ func (s *Service) FPKGiItems(ctx context.Context, advertise Advertiser) ([]fpkgi
 	return items, nil
 }
 
-func pkgItem(base, root, relative string, size int64) fpkgi.Item {
+func pkgItem(ctx context.Context, base, root, relative string, size int64) fpkgi.Item {
 	filename := filepath.Base(relative)
 	contentID := contentIDPattern.FindString(filename)
 	if contentID == "" {
@@ -110,14 +111,50 @@ func pkgItem(base, root, relative string, size int64) fpkgi.Item {
 	if match := pkgVersionRegexp.FindStringSubmatch(filename); len(match) == 3 {
 		item.Version = fmt.Sprintf("%02s.%s", match[1], match[2])
 	}
-	stem := strings.TrimSuffix(relative, filepath.Ext(relative))
-	for _, extension := range coverExtensions {
-		if info, err := os.Stat(filepath.Join(root, stem+extension)); err == nil && info.Mode().IsRegular() {
-			item.CoverURL = base + fpkgiURL("covers", stem+extension)
-			break
-		}
+	if avatar := imageAvatarURL(ctx, root, relative); avatar != "" {
+		item.CoverURL = base + avatar
 	}
 	return item
+}
+
+func imageAvatarURL(ctx context.Context, root, relative string) string {
+	stem := strings.TrimSuffix(relative, filepath.Ext(relative))
+	for _, ext := range coverExtensions {
+		for _, candidate := range []string{stem + ext, stem + strings.ToUpper(ext)} {
+			info, err := os.Lstat(filepath.Join(root, candidate))
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				if _, err := resolveLibraryFile(root, candidate, coverExtensions); err != nil {
+					continue
+				}
+			} else if !info.Mode().IsRegular() {
+				continue
+			}
+			return fpkgiURL("covers", candidate)
+		}
+	}
+	if !strings.EqualFold(filepath.Ext(relative), ".pkg") {
+		return ""
+	}
+	path, err := resolveLibraryFile(root, relative, []string{".pkg"})
+	if err != nil {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return ""
+	}
+	if _, _, err := pkgicon.Find(ctx, file, info.Size()); err != nil {
+		return ""
+	}
+	return fpkgiURL("icons", relative)
 }
 
 // headerContentID reads the content ID from the start of a package. Both PS4
@@ -161,18 +198,30 @@ func (s *Service) FPKGiHandler(advertise Advertiser) http.Handler {
 				return
 			}
 			fpkgi.Write(w, r, items, "")
-		case strings.HasPrefix(name, "pkg/"):
-			s.serveLibraryFile(w, r, strings.TrimPrefix(name, "pkg/"), []string{".pkg"}, "application/octet-stream")
-		case strings.HasPrefix(name, "covers/"):
-			s.serveLibraryFile(w, r, strings.TrimPrefix(name, "covers/"), coverExtensions, "")
 		default:
-			http.NotFound(w, r)
+			kind, escaped, _ := strings.Cut(name, "/")
+			s.serveLibraryFile(w, r, kind, escaped)
 		}
 	})
 }
 
-func (s *Service) serveLibraryFile(w http.ResponseWriter, r *http.Request, escaped string, extensions []string, contentType string) {
-	path, err := resolveLibraryFile(s.GameDir, escaped, extensions)
+func (s *Service) serveLibraryFile(w http.ResponseWriter, r *http.Request, kind, escaped string) {
+	var extensions []string
+	switch kind {
+	case "pkg", "icons":
+		extensions = []string{".pkg"}
+	case "covers":
+		extensions = coverExtensions
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	relative, err := url.PathUnescape(escaped)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	path, err := resolveLibraryFile(s.GameDir, relative, extensions)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -188,20 +237,25 @@ func (s *Service) serveLibraryFile(w http.ResponseWriter, r *http.Request, escap
 		http.Error(w, "file unavailable", http.StatusGone)
 		return
 	}
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
+	if kind == "icons" {
+		icon, extension, err := pkgicon.Find(r.Context(), file, info.Size())
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeContent(w, r, "icon0"+extension, info.ModTime(), icon)
+		return
+	}
+	if kind == "pkg" {
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-// resolveLibraryFile maps an escaped URL path onto a regular file inside root,
+// resolveLibraryFile maps a library-relative path onto a regular file inside root,
 // rejecting traversal, symlink escapes, hidden entries, and other extensions.
-func resolveLibraryFile(configuredRoot, escaped string, extensions []string) (string, error) {
-	relativeURL, err := url.PathUnescape(escaped)
-	if err != nil || relativeURL == "" {
-		return "", fmt.Errorf("invalid path")
-	}
-	relative := filepath.Clean(filepath.FromSlash(relativeURL))
+func resolveLibraryFile(configuredRoot, relative string, extensions []string) (string, error) {
+	relative = filepath.Clean(filepath.FromSlash(relative))
 	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("invalid path")
 	}

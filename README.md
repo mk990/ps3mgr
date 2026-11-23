@@ -327,9 +327,25 @@ The configured PS2 system directory must exist and contain files before installa
 
 ## PS5 / ShadowMountPlus behavior
 
-The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and every documented image source: `.ffpkg`, `.exfat`, `.ffpfs`, and `.ffpfsc`. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames. As upstream requires, `backports/` is excluded from normal game discovery; `.ffpfs` and `.ffpfsc` remain marked as upstream experimental formats but can be copied normally.
+The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and every documented image source: `.ffpkg`, `.exfat`, `.ffpfs`, and `.ffpfsc`. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames. Normal game discovery skips `backports/`.
+
+PS5 pulls keep the original filename and extension for packages and ShadowMountPlus images. The library shows a matching PNG or JPEG beside the file, or the embedded icon in a native `.pkg`. When available, a pull also saves artwork from the console beside the downloaded game. For `.ffpfsc` containers, it can read the avatar from the nested image mounted by ShadowMountPlus. The container can still be copied while unmounted.
 
 Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` markers before registering a host as a PS5. The web API accepts a console ID and local game IDs, never an arbitrary remote filesystem path. PS5 transfers are sequential within their own queue, but run concurrently with PS2 and PS3 jobs.
+
+### Convert a PS5 folder to an image
+
+On **PS5 Games**, select a local folder, choose **exFAT**, **FFPKG** (UFS2), or **FFPFSC** (compressed exFAT), then click **Convert selected folder**. Keep the page open until the conversion finishes. The image appears beside the source folder and can be selected separately for upload. Existing images are preserved.
+
+The same operation is available from the CLI using a title, title ID, or the `library_id` from `ps3mgr ps5 local-games --json`.
+
+```sh
+ps3mgr ps5 convert --format exfat PPSA12345
+ps3mgr ps5 convert --format ffpkg PPSA12345
+ps3mgr ps5 convert --format ffpfsc PPSA12345
+```
+
+The Docker image includes the builders. For a standalone installation, place [MkPFS 1.1.0](https://github.com/PSBrew/MkPFS) on `PATH` for exFAT and FFPFSC. For FFPKG, install the BSD `makefs` utility or the [UFS2Tool CLI](https://github.com/SvenGDK/UFS2Tool). Conversion writes ordinary image files as the current user.
 
 ## FPKGi content lists
 
@@ -358,7 +374,7 @@ For example, in `/user/data/FPKGi/config.json`:
 The package server's index page (`http://HOST_LAN_IP:8081/`) links to these lists, and it also accepts `/ps4/fpkgi/games.json`, `/ps5/fpkgi` and the panel's paths (`/api/ps4/fpkgi/games.json`, `/api/ps5/fpkgi`) as aliases. Any other unknown path returns a 404 listing the correct URLs. The same files can be downloaded from the panel (the **Export FPKGi content JSON** panel on the dashboard, which also shows the live URLs and copies a ready-made `CONTENT_URLS` block, links on the PS4 Packages and PS5 Games pages, or `GET /api/ps4/fpkgi/{category}` and `GET /api/ps5/fpkgi`) and copied to `/user/data/FPKGi/ContentJSONs/`; their URLs still point at the package server.
 
 - **PS4:** packages are grouped as games, updates, or DLC using the same rules as the PS4 Packages page. License-only packages are omitted, and so are split packages (`_0.pkg`, `_1.pkg`, …) because FPKGi downloads a single file per entry. Region, version, and the cached `icon0` cover are included when known.
-- **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. The title ID and region come from the content ID in the file name or package header, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) becomes its cover. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.
+- **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. The title ID and region come from the content ID in the file name or package header, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) takes priority over the embedded package icon. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.
 
 ## PS3 and network requirements
 
@@ -431,6 +447,7 @@ POST   /api/ps4/queue/pause
 POST   /api/ps4/queue/resume
 DELETE /api/ps4/queue/completed
 GET    /api/ps5/games
+POST   /api/ps5/convert
 GET    /api/ps5/games/{id}/icon
 GET    /api/ps5/fpkgi
 POST   /api/ps5/scan

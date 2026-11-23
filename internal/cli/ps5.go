@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ func (r Runner) ps5(ctx context.Context, application *app.Service, args []string
 
 Usage:
   ps3mgr ps5 local-games [--dir PATH] [--json]
+  ps3mgr ps5 convert --format exfat|ffpkg|ffpfsc GAME
   ps3mgr ps5 scan CIDR [--workers N] [--json]
   ps3mgr ps5 consoles [--json]
   ps3mgr ps5 add-console --ip IP [--json]
@@ -34,6 +36,20 @@ an arbitrary remote destination path.
 	switch args[0] {
 	case "local-games":
 		return r.ps5LocalGames(ctx, application, args[1:])
+	case "convert":
+		set := newFlagSet("ps5 convert", r.Err)
+		format := set.String("format", "", "output image format")
+		if err := set.Parse(args[1:]); err != nil {
+			return err
+		}
+		if set.NArg() != 1 {
+			return fmt.Errorf("select one PS5 game folder by title, ID, or library_id")
+		}
+		name, err := application.PS5.ConvertFolder(ctx, set.Arg(0), *format)
+		if err == nil {
+			fmt.Fprintln(r.Out, "Created", name)
+		}
+		return err
 	case "scan":
 		return r.ps5Scan(ctx, application, args[1:])
 	case "consoles":
@@ -237,14 +253,14 @@ func (r Runner) ps5Install(ctx context.Context, application *app.Service, args [
 	ids := make([]string, 0, len(local))
 	if *all {
 		for _, game := range local {
-			ids = append(ids, games.PublicID(game))
+			ids = append(ids, game.LibraryID)
 		}
 	} else {
 		for _, wanted := range requested {
 			found := false
 			for _, game := range local {
-				if strings.EqualFold(wanted, game.Title) || strings.EqualFold(wanted, game.ID) || strings.EqualFold(wanted, games.PublicID(game)) {
-					ids = append(ids, games.PublicID(game))
+				if wanted == game.LibraryID || wanted == filepath.Base(game.LocalPath) || strings.EqualFold(wanted, game.Title) || strings.EqualFold(wanted, game.ID) || strings.EqualFold(wanted, games.PublicID(game)) {
+					ids = append(ids, game.LibraryID)
 					found = true
 					break
 				}

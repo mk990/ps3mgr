@@ -2,23 +2,15 @@ package ps4
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-)
 
-const (
-	icon0EntryID    = 0x1200
-	maxIcon0Bytes   = 20 << 20
-	maxTableEntries = 1 << 16
+	"ps3mgr/internal/pkgicon"
 )
-
-var errIcon0NotFound = errors.New("PS4 package does not contain icon0")
 
 type CoverCache struct{}
 
@@ -98,7 +90,7 @@ func (c *CoverCache) Populate(ctx context.Context, root string, packages []Packa
 			continue
 		}
 		data, extension, err := extractPackageIcon(ctx, packages[i].Parts[0].Path)
-		if errors.Is(err, errIcon0NotFound) {
+		if errors.Is(err, pkgicon.ErrNotFound) {
 			continue
 		}
 		if err != nil {
@@ -131,46 +123,12 @@ func extractPackageIcon(ctx context.Context, path string) ([]byte, string, error
 	if err != nil {
 		return nil, "", err
 	}
-	header := make([]byte, 32)
-	if _, err = io.ReadFull(file, header); err != nil || binary.BigEndian.Uint32(header[:4]) != 0x7f434e54 {
-		return nil, "", errIcon0NotFound
+	icon, extension, err := pkgicon.Find(ctx, file, info.Size())
+	if err != nil {
+		return nil, "", err
 	}
-	total := binary.BigEndian.Uint32(header[16:20])
-	tableOffset := binary.BigEndian.Uint32(header[24:28])
-	if total == 0 || total > maxTableEntries || uint64(tableOffset)+uint64(total)*32 > uint64(info.Size()) {
-		return nil, "", errIcon0NotFound
-	}
-	entry := make([]byte, 32)
-	for index := uint32(0); index < total; index++ {
-		if err = ctx.Err(); err != nil {
-			return nil, "", err
-		}
-		if _, err = file.ReadAt(entry, int64(tableOffset)+int64(index)*32); err != nil {
-			return nil, "", fmt.Errorf("read PS4 package table: %w", err)
-		}
-		if binary.BigEndian.Uint32(entry[:4]) != icon0EntryID {
-			continue
-		}
-		offset, size := binary.BigEndian.Uint32(entry[16:20]), binary.BigEndian.Uint32(entry[20:24])
-		if size == 0 || size > maxIcon0Bytes || uint64(offset)+uint64(size) > uint64(info.Size()) {
-			return nil, "", fmt.Errorf("invalid icon0 entry in %s", filepath.Base(path))
-		}
-		data := make([]byte, size)
-		if _, err = file.ReadAt(data, int64(offset)); err != nil {
-			return nil, "", fmt.Errorf("read icon0 from %s: %w", filepath.Base(path), err)
-		}
-		switch http.DetectContentType(data) {
-		case "image/png":
-			return data, ".png", nil
-		case "image/jpeg":
-			return data, ".jpg", nil
-		case "image/webp":
-			return data, ".webp", nil
-		default:
-			return nil, "", fmt.Errorf("icon0 in %s is not a supported image", filepath.Base(path))
-		}
-	}
-	return nil, "", errIcon0NotFound
+	data, err := io.ReadAll(icon)
+	return data, extension, err
 }
 
 func writeCoverAtomically(destination string, data []byte) error {

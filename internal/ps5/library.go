@@ -2,6 +2,7 @@ package ps5
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -12,12 +13,12 @@ import (
 	"strings"
 
 	"ps3mgr/internal/domain"
-	"ps3mgr/internal/games"
 )
 
 var titleIDPattern = regexp.MustCompile(`(?i)(PPSA|CUSA)[-_ ]?(\d{5})`)
 
 var imageFormats = map[string]string{
+	".pkg":    "pkg",
 	".ffpfsc": "ffpfsc",
 	".exfat":  "exfat",
 	".ffpkg":  "ffpkg",
@@ -75,14 +76,47 @@ func (Library) Scan(ctx context.Context, root string) ([]domain.Game, error) {
 			ID: id, Title: title, Format: format, LocalPath: path, Size: fileInfo.Size(),
 			State: domain.StateNotInstalled,
 		}
-		game.IconURL = ""
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		game.IconURL = imageAvatarURL(ctx, root, relative)
 		result = append(result, game)
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scan PS5 game directory %q: %w", root, err)
 	}
-	sort.Slice(result, func(i, j int) bool { return strings.ToLower(result[i].Title) < strings.ToLower(result[j].Title) })
+	// A folder and every image built from it can share the same title ID.
+	folders := make(map[string]domain.Game)
+	for i := range result {
+		game := &result[i]
+		relative, err := filepath.Rel(root, game.LocalPath)
+		if err != nil {
+			return nil, err
+		}
+		key := sha256.Sum256([]byte(filepath.ToSlash(relative)))
+		game.LibraryID = fmt.Sprintf("ps5-%x", key[:16])
+		if game.Format == "folder" {
+			if game.IconPath != "" {
+				game.IconURL = "/api/ps5/games/" + game.LibraryID + "/icon"
+			}
+			folders[game.LocalPath] = *game
+		}
+	}
+	for i := range result {
+		game := &result[i]
+		if game.Format == "folder" {
+			continue
+		}
+		if source, ok := folders[strings.TrimSuffix(game.LocalPath, filepath.Ext(game.LocalPath))]; ok {
+			game.Title, game.ID = source.Title, source.ID
+			if game.IconURL == "" {
+				game.IconURL = source.IconURL
+			}
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool { return strings.ToLower(result[i].Title) < strings.ToLower(result[j].Title) })
 	return result, nil
 }
 
@@ -108,7 +142,6 @@ func folderGame(ctx context.Context, directory, paramPath string) (domain.Game, 
 		icon := filepath.Join(directory, "sce_sys", name)
 		if info, iconErr := os.Lstat(icon); iconErr == nil && info.Mode().IsRegular() {
 			game.IconPath = icon
-			game.IconURL = "/api/ps5/games/" + games.PublicID(game) + "/icon"
 			break
 		}
 	}

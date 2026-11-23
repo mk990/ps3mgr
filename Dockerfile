@@ -21,7 +21,12 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
       -o /out/ps3mgr \
       ./cmd/ps3mgr
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM python:3.13-slim-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends makefs \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir mkpfs==1.1.0
+USER 65532:65532
 
 ARG VERSION=dev
 ARG COMMIT=unknown

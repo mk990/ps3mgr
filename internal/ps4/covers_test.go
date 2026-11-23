@@ -76,7 +76,7 @@ func writePKGIconFixture(t *testing.T, path string) {
 	binary.BigEndian.PutUint32(data[:4], 0x7f434e54)
 	binary.BigEndian.PutUint32(data[16:20], 1)
 	binary.BigEndian.PutUint32(data[24:28], 0x100)
-	binary.BigEndian.PutUint32(data[0x100:0x104], icon0EntryID)
+	binary.BigEndian.PutUint32(data[0x100:0x104], 0x1200)
 	binary.BigEndian.PutUint32(data[0x110:0x114], 0x200)
 	binary.BigEndian.PutUint32(data[0x114:0x118], uint32(len(icon)))
 	copy(data[0x200:], icon)

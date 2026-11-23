@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -229,6 +230,7 @@ func assertFileContents(t *testing.T, path, want string) {
 
 type downloadFTPServer struct {
 	listener         net.Listener
+	files            map[string][]byte
 	payload          []byte
 	resume           bool
 	interruptAfter   int
@@ -245,6 +247,14 @@ type downloadFTPServer struct {
 	selfReportedSize int
 	selfCommands     int
 	storOffsets      []int64
+}
+
+// NewFileFTPServer supplies named files to cross-package transfer tests.
+func NewFileFTPServer(t *testing.T, files map[string][]byte) *downloadFTPServer {
+	server := newDownloadFTPServer(t, nil, true, 0)
+	server.files = files
+	t.Cleanup(server.Close)
+	return server
 }
 
 func newDownloadFTPServer(t *testing.T, payload []byte, resume bool, interruptAfter int) *downloadFTPServer {
@@ -339,6 +349,14 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 		case "TYPE":
 			respond(200, "binary mode")
 		case "SIZE":
+			if s.files != nil {
+				if data, ok := s.files[argument]; ok {
+					respond(213, strconv.Itoa(len(data)))
+				} else {
+					respond(550, "file unavailable")
+				}
+				continue
+			}
 			s.mu.Lock()
 			reportedSize := s.reportedSize
 			if s.dynamicSize {
@@ -405,7 +423,15 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 			if err != nil {
 				return
 			}
-			_, _ = io.WriteString(dataConn, strings.Join(s.names, "\r\n")+"\r\n")
+			names := s.names
+			if s.files != nil {
+				for filename := range s.files {
+					if path.Dir(filename) == argument {
+						names = append(names, path.Base(filename))
+					}
+				}
+			}
+			_, _ = io.WriteString(dataConn, strings.Join(names, "\r\n")+"\r\n")
 			_ = dataConn.Close()
 			_ = dataListener.Close()
 			dataListener = nil
@@ -426,6 +452,17 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 			dataListener = nil
 			respond(226, "transfer complete")
 		case "RETR":
+			source := s.payload
+			if s.files != nil {
+				var ok bool
+				source, ok = s.files[argument]
+				if !ok {
+					respond(550, "file unavailable")
+					_ = dataListener.Close()
+					dataListener = nil
+					continue
+				}
+			}
 			s.mu.Lock()
 			s.retrOffsets = append(s.retrOffsets, offset)
 			s.mu.Unlock()
@@ -434,7 +471,7 @@ func (s *downloadFTPServer) serveControl(conn net.Conn) {
 			if err != nil {
 				return
 			}
-			payload := s.payload[offset:]
+			payload := source[offset:]
 			interrupted := s.interruptAfter > 0 && s.interruptAfter < len(payload)
 			if interrupted {
 				payload = payload[:s.interruptAfter]

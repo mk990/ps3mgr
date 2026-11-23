@@ -1,6 +1,9 @@
 package ps5
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +12,69 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestEmbeddedPackageAvatar(t *testing.T) {
+	for _, wrapper := range []string{"CNT", "FIH", "LIH"} {
+		t.Run(wrapper, func(t *testing.T) {
+			root := t.TempDir()
+			const name = "Game #1.PKG"
+			var base int
+			if wrapper != "CNT" {
+				base = 0x200
+			}
+			icon := []byte("\x89PNG\r\n\x1a\n")
+			data := make([]byte, base+0x200+len(icon))
+			copy(data, "\x7f"+wrapper)
+			switch wrapper {
+			case "FIH":
+				data[6] = 3
+				binary.LittleEndian.PutUint64(data[0x58:], uint64(base))
+			case "LIH":
+				data[6] = 1
+				binary.LittleEndian.PutUint64(data[0x30:], uint64(base))
+			}
+			header := data[base:]
+			copy(header, "\x7fCNT")
+			binary.BigEndian.PutUint32(header[16:], 1)
+			binary.BigEndian.PutUint32(header[24:], 0x100)
+			binary.BigEndian.PutUint32(header[0x100:], 0x1200)
+			binary.BigEndian.PutUint32(header[0x110:], 0x200)
+			binary.BigEndian.PutUint32(header[0x114:], uint32(len(icon)))
+			copy(header[0x200:], icon)
+			path := filepath.Join(root, name)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			service := &Service{GameDir: root}
+			ctx := context.Background()
+			items, err := service.LocalGames(ctx, "")
+			if err != nil || len(items) != 1 || items[0].IconURL == "" {
+				t.Fatalf("games = %+v, %v", items, err)
+			}
+			advertise := func() (string, error) { return "http://localhost", nil }
+			feed, err := service.FPKGiItems(ctx, advertise)
+			if err != nil || len(feed) != 1 || feed[0].CoverURL != "http://localhost"+items[0].IconURL {
+				t.Fatalf("feed = %+v, %v", feed, err)
+			}
+			handler := service.FPKGiHandler(advertise)
+			request := httptest.NewRequest(http.MethodGet, items[0].IconURL, nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), icon) || recorder.Header().Get("Content-Type") != "image/png" {
+				t.Fatalf("avatar response = %v, %q", recorder.Result(), recorder.Body.Bytes())
+			}
+			binary.BigEndian.PutUint32(header[0x114:], 0xffffffff)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			recorder = httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("oversized icon status = %d", recorder.Code)
+			}
+		})
+	}
+}
 
 func TestFPKGiListsPS5PackagesWithCovers(t *testing.T) {
 	root := t.TempDir()

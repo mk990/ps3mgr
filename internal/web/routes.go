@@ -118,8 +118,12 @@ func (s *Server) routes() {
 		writeJSON(w, http.StatusOK, map[string]int{"removed": s.app.PS4.Queue.ClearCompleted() + s.app.PS4.Pulls.ClearCompleted()})
 	})
 	s.mux.HandleFunc("GET /api/ps5/games", s.ps5Games)
+	s.mux.HandleFunc("POST /api/ps5/convert", s.ps5Convert)
 	s.mux.HandleFunc("GET /api/ps5/games/{id}/icon", s.ps5Icon)
 	s.mux.HandleFunc("GET /api/ps5/fpkgi", s.ps5FPKGi)
+	avatars := s.app.PS5.FPKGiHandler(s.app.FPKGiAdvertiser)
+	s.mux.Handle("GET /fpkgi/ps5/icons/", avatars)
+	s.mux.Handle("GET /fpkgi/ps5/covers/", avatars)
 	s.mux.HandleFunc("POST /api/ps5/scan", s.ps5Scan)
 	s.mux.HandleFunc("GET /api/ps5/consoles", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.app.PS5.Consoles()) })
 	s.mux.HandleFunc("POST /api/ps5/consoles/prune", func(w http.ResponseWriter, r *http.Request) {

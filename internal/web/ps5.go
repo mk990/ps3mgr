@@ -17,6 +17,23 @@ func (s *Server) ps5Games(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (s *Server) ps5Convert(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		GameID string `json:"game_id"`
+		Format string `json:"format"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	name, err := s.app.PS5.ConvertFolder(r.Context(), request.GameID, request.Format)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"filename": name})
+}
+
 func (s *Server) ps5Icon(w http.ResponseWriter, r *http.Request) {
 	icon, ok := s.app.PS5.LocalIcon(r.PathValue("id"))
 	if !ok {

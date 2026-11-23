@@ -93,7 +93,7 @@ func (s *Service) LocalIcon(publicID string) (string, bool) {
 		return "", false
 	}
 	for _, game := range s.local {
-		if games.PublicID(game) != publicID || game.IconPath == "" {
+		if (game.LibraryID != publicID && games.PublicID(game) != publicID) || game.IconPath == "" {
 			continue
 		}
 		absolute, err := filepath.Abs(filepath.Clean(game.IconPath))
@@ -254,7 +254,7 @@ func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) 
 	seen := make(map[string]bool)
 	for _, wanted := range gameIDs {
 		for _, game := range s.local {
-			if !seen[wanted] && games.PublicID(game) == wanted {
+			if !seen[wanted] && (game.LibraryID == wanted || games.PublicID(game) == wanted) {
 				selected = append(selected, game)
 				seen[wanted] = true
 				break
@@ -282,7 +282,7 @@ func (s *Service) EnqueuePull(ctx context.Context, consoleIP string, gameIDs []s
 	for _, wanted := range gameIDs {
 		found := false
 		for _, game := range remote {
-			if games.PublicID(game) == wanted || strings.EqualFold(game.Title, wanted) || strings.EqualFold(game.ID, wanted) {
+			if game.RemotePath == wanted || games.PublicID(game) == wanted || strings.EqualFold(game.Title, wanted) || strings.EqualFold(game.ID, wanted) {
 				selected = append(selected, game)
 				found = true
 				break

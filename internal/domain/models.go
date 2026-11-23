@@ -16,6 +16,7 @@ const (
 
 type Game struct {
 	ID         string    `json:"id"`
+	LibraryID  string    `json:"library_id,omitempty"`
 	Title      string    `json:"title"`
 	Format     string    `json:"format,omitempty"`
 	Version    string    `json:"version,omitempty"`
