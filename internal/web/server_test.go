@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -415,6 +416,8 @@ func TestFPKGiExportsDownloadAndShareThePackageServer(t *testing.T) {
 
 func TestPS5BatchConversionRemainsQueuedAfterRequestEnds(t *testing.T) {
 	root := t.TempDir()
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
 	for _, name := range []string{"First", "Second"} {
 		dir := filepath.Join(root, name, "sce_sys")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -428,7 +431,9 @@ func TestPS5BatchConversionRemainsQueuedAfterRequestEnds(t *testing.T) {
 	defer application.Close(context.Background())
 	handler := New(application).Handler()
 	queue := application.PS5.Conversions
-	queue.Pause()
+	if err := queue.Pause(); err != nil {
+		t.Fatal(err)
+	}
 	post := func(body string) *httptest.ResponseRecorder {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -442,6 +447,16 @@ func TestPS5BatchConversionRemainsQueuedAfterRequestEnds(t *testing.T) {
 		t.Fatalf("invalid batch: %d, queue %+v", w.Code, queue.List())
 	}
 	batch := `{"game_ids":["Second","First","First"],"format":"EXFAT"}`
+	if w := post(batch); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "requires MkPFS") || len(queue.List()) != 0 {
+		t.Fatalf("missing builder: %d %s, queue %+v", w.Code, w.Body.String(), queue.List())
+	}
+	builder := "mkpfs"
+	if runtime.GOOS == "windows" {
+		builder += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(bin, builder), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if w := post(batch); w.Code != http.StatusAccepted {
 		t.Fatalf("submit: %d %s", w.Code, w.Body.String())
 	}
@@ -461,5 +476,19 @@ func TestPS5BatchConversionRemainsQueuedAfterRequestEnds(t *testing.T) {
 		if job.State != domain.QueueWaiting || job.OutputFormat != "exfat" || job.Direction != domain.TransferConversion {
 			t.Fatalf("queued job: %+v", job)
 		}
+	}
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restarted := app.New(config.Config{PS5GameDir: root})
+	defer restarted.Close(context.Background())
+	w = httptest.NewRecorder()
+	New(restarted).Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ps5/queue", nil))
+	var restored []domain.Transfer
+	if err := json.Unmarshal(w.Body.Bytes(), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 2 || restored[0].ID != jobs[0].ID || restored[1].ID != jobs[1].ID || restored[0].State != domain.QueueWaiting || restored[1].State != domain.QueueWaiting {
+		t.Fatalf("restored paused selection: %+v", restored)
 	}
 }

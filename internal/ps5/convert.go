@@ -2,6 +2,7 @@ package ps5
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"ps3mgr/internal/domain"
+	"ps3mgr/internal/filelock"
 	"ps3mgr/internal/games"
 	"ps3mgr/internal/transfers"
 )
@@ -21,7 +23,10 @@ func (s *Service) ConvertFolder(ctx context.Context, wanted, format string) (str
 	if err != nil {
 		return "", err
 	}
-	return s.buildImage(ctx, folders[0], format)
+	if err := s.checkConversion(ctx, folders[0], format, make(map[string]bool)); err != nil {
+		return "", err
+	}
+	return s.buildImage(ctx, folders[0], format, nil)
 }
 
 // EnqueueConversions resolves the entire selection before submitting any jobs.
@@ -30,7 +35,56 @@ func (s *Service) EnqueueConversions(ctx context.Context, wanted []string, forma
 	if err != nil {
 		return nil, err
 	}
+	probed := make(map[string]bool)
+	for _, folder := range folders {
+		if err := s.checkConversion(ctx, folder, format, probed); err != nil {
+			return nil, err
+		}
+	}
 	return s.Conversions.Enqueue(folders, "", transfers.Options{OutputFormat: format})
+}
+
+func (s *Service) RestoreConversions() error {
+	root, err := filepath.Abs(s.GameDir)
+	if err != nil {
+		return err
+	}
+	return s.Conversions.RestoreConversions(filepath.Join(root, ".ps3mgr-conversion-queue.json"), s.recoverConversion)
+}
+
+func (s *Service) RetryConversion(ctx context.Context, id string) error {
+	item, found := s.Conversions.Get(id)
+	if found && (item.State == domain.QueueFailed || item.State == domain.QueueCancelled) {
+		if err := s.checkConversion(ctx, item.Game, item.OutputFormat, make(map[string]bool)); err != nil {
+			return err
+		}
+	}
+	return s.Conversions.Retry(id)
+}
+
+func (s *Service) checkConversion(ctx context.Context, folder domain.Game, format string, probed map[string]bool) error {
+	paths, err := s.conversionPaths(folder, format)
+	if err != nil {
+		return err
+	}
+	if err := requireNewImage(paths.output); err != nil {
+		return err
+	}
+	if _, err := imageBuilder(ctx, format, paths.source, paths.staged); err != nil {
+		return err
+	}
+	parent := filepath.Dir(paths.output)
+	if !probed[parent] {
+		probe, err := os.MkdirTemp(parent, ".ps3mgr-conversion-probe-*")
+		if err != nil {
+			return fmt.Errorf("cannot write conversion output in %s; mount the PS5 library read/write and check directory permissions: %w", parent, err)
+		}
+		if err := os.Remove(probe); err != nil {
+			return fmt.Errorf("remove conversion write probe: %w", err)
+		}
+		probed[parent] = true
+	}
+	return nil
 }
 
 func (s *Service) conversionFolders(ctx context.Context, wanted []string, format string) ([]domain.Game, string, error) {
@@ -78,48 +132,101 @@ func (s *Service) conversionFolders(ctx context.Context, wanted []string, format
 	return selected, format, nil
 }
 
-func (s *Service) buildImage(ctx context.Context, folder domain.Game, format string) (string, error) {
+type conversionPaths struct {
+	source string
+	output string
+	stage  string
+	staged string
+}
+
+func (s *Service) conversionPaths(folder domain.Game, format string) (conversionPaths, error) {
+	var paths conversionPaths
+	switch format {
+	case "exfat", "ffpkg", "ffpfsc":
+	default:
+		return paths, fmt.Errorf("invalid PS5 image format %q", format)
+	}
 	// A queued folder or its parent could have been moved or replaced since discovery.
 	root, err := filepath.Abs(s.GameDir)
 	if err != nil {
-		return "", err
+		return paths, err
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", err
+		return paths, err
 	}
 	relative, err := filepath.Rel(root, folder.LocalPath)
-	if err != nil || !filepath.IsLocal(relative) {
-		return "", fmt.Errorf("invalid PS5 folder location")
+	if err != nil || !filepath.IsLocal(relative) || relative == "." {
+		return paths, fmt.Errorf("invalid PS5 folder location")
 	}
 	realFolder, err := filepath.EvalSymlinks(folder.LocalPath)
 	if err != nil {
-		return "", err
+		return paths, err
 	}
 	if realFolder != filepath.Join(realRoot, relative) {
-		return "", fmt.Errorf("PS5 folder location changed after discovery")
+		return paths, fmt.Errorf("PS5 folder location changed after discovery")
 	}
 	info, err := os.Stat(filepath.Join(realFolder, "sce_sys", "param.json"))
 	if err != nil {
-		return "", err
+		return paths, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("missing PS5 game metadata")
+		return paths, fmt.Errorf("missing PS5 game metadata")
 	}
-	output := folder.LocalPath + "." + format
-	if err := requireNewImage(output); err != nil {
+	output := realFolder + "." + format
+	key := sha256.Sum256([]byte(filepath.Base(output)))
+	stage := filepath.Join(filepath.Dir(output), fmt.Sprintf(".ps3mgr-conversion-%x", key[:16]))
+	return conversionPaths{source: realFolder, output: output, stage: stage, staged: filepath.Join(stage, filepath.Base(output))}, nil
+}
+
+func (s *Service) recoverConversion(item domain.Transfer) string {
+	paths, err := s.conversionPaths(item.Game, item.OutputFormat)
+	if err != nil {
+		return ""
+	}
+	lock, err := filelock.Open(paths.stage + ".lock")
+	if err != nil {
+		return "" // A builder may still be running after the server exited.
+	}
+	defer lock.Close()
+	_, stagedErr := os.Lstat(paths.staged)
+	info, outputErr := os.Lstat(paths.output)
+	_ = os.RemoveAll(paths.stage) // If cleanup fails, a retry reports the error.
+	if item.ConversionPhase == domain.ConversionFinalizing && errors.Is(stagedErr, fs.ErrNotExist) &&
+		outputErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		return filepath.Base(paths.output)
+	}
+	return ""
+}
+
+func (s *Service) buildImage(ctx context.Context, folder domain.Game, format string, phase func(domain.ConversionPhase) error) (string, error) {
+	paths, err := s.conversionPaths(folder, format)
+	if err != nil {
 		return "", err
 	}
-	// One staging directory per output also serializes CLI and web writers.
-	stage := filepath.Join(filepath.Dir(output), "."+folder.LibraryID+"-"+format)
-	if err := os.Mkdir(stage, 0o700); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return "", fmt.Errorf("conversion already in progress or interrupted (staging directory %s)", stage)
-		}
+	if err := requireNewImage(paths.output); err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(stage)
-	if err := filepath.WalkDir(folder.LocalPath, func(path string, entry fs.DirEntry, err error) error {
+	cmd, err := imageBuilder(ctx, format, paths.source, paths.staged)
+	if err != nil {
+		return "", err
+	}
+	lock, err := filelock.Open(paths.stage + ".lock")
+	if err != nil {
+		return "", fmt.Errorf("cannot lock conversion output; check for a running conversion or a read-only destination: %w", err)
+	}
+	defer lock.Close()
+	if err := requireNewImage(paths.output); err != nil {
+		return "", err
+	}
+	if err := os.RemoveAll(paths.stage); err != nil {
+		return "", fmt.Errorf("clean up interrupted conversion: %w", err)
+	}
+	if err := os.Mkdir(paths.stage, 0o700); err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(paths.stage)
+	if err := filepath.WalkDir(paths.source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -130,12 +237,15 @@ func (s *Service) buildImage(ctx context.Context, folder domain.Game, format str
 	}); err != nil {
 		return "", err
 	}
-	staged := filepath.Join(stage, filepath.Base(output))
-	cmd, err := imageBuilder(ctx, format, folder.LocalPath, staged)
-	if err != nil {
+	if err := filelock.Inherit(cmd, lock); err != nil {
 		return "", err
 	}
-	cmd.Dir = stage
+	if phase != nil {
+		if err := phase(domain.ConversionBuilding); err != nil {
+			return "", err
+		}
+	}
+	cmd.Dir = paths.stage
 	var log builderLog
 	cmd.Stdout, cmd.Stderr = &log, &log
 	if err := cmd.Run(); err != nil {
@@ -144,7 +254,7 @@ func (s *Service) buildImage(ctx context.Context, folder domain.Game, format str
 		}
 		return "", fmt.Errorf("build %s: %w: %s", format, err, strings.TrimSpace(string(log)))
 	}
-	info, err = os.Lstat(staged)
+	info, err := os.Lstat(paths.staged)
 	if err != nil {
 		return "", fmt.Errorf("locate built image: %w", err)
 	}
@@ -154,16 +264,24 @@ func (s *Service) buildImage(ctx context.Context, folder domain.Game, format str
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := requireNewImage(output); err != nil {
+	if err := requireNewImage(paths.output); err != nil {
 		return "", err
 	}
-	if err := os.Rename(staged, output); err != nil {
+	if phase != nil {
+		if err := phase(domain.ConversionFinalizing); err != nil {
+			return "", err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(paths.staged, paths.output); err != nil {
 		return "", err
 	}
 	s.mu.Lock()
 	s.local = nil
 	s.mu.Unlock()
-	return filepath.Base(output), nil
+	return filepath.Base(paths.output), nil
 }
 
 func requireNewImage(path string) error {

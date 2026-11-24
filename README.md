@@ -49,7 +49,7 @@ docker run --rm \
 	-v /data/ps2:/data/ps2 \
 	-v /data/ps4:/data/ps4:ro \
 	-v /data/ps4-covers:/data/ps4/covers \
-	-v /data/ps5:/data/ps5:ro \
+	-v /data/ps5:/data/ps5 \
 	-v /media/ps2-usb:/mnt/usb \
   ps3mgr:dev
 ```
@@ -76,12 +76,14 @@ docker run --rm \
 	-v /data/ps2-covers:/data/ps2/covers \
 	-v /data/ps4:/data/ps4:ro \
 	-v /data/ps4-covers:/data/ps4/covers \
-	-v /data/ps5:/data/ps5:ro \
+	-v /data/ps5:/data/ps5 \
 	-v /media/ps2-usb:/mnt/usb \
   ghcr.io/OWNER/ps3mgr:latest
 ```
 
 Replace `OWNER` with the lowercase GitHub account or organization name.
+
+PS5 folder conversion and console pulls require a writable PS5 mount. Give container UID `65532` write access to `/data/ps5` and the directories where images are created. For browsing or uploading existing PS5 games, the library can be mounted read-only.
 
 ## Automated releases and GHCR
 
@@ -335,7 +337,9 @@ Network discovery probes port 2121 and verifies both `/data` and `/data/etaHEN` 
 
 ### Convert a PS5 folder to an image
 
-On **PS5 Games**, select one or more local game folders, choose **exFAT**, **FFPKG** (UFS2), or **FFPFSC** (compressed exFAT), then click **Queue conversions**. The server builds one image at a time and continues when you close the browser. Open **PS5 Queue** to check results, cancel a job, or retry it. Each completed image appears beside its source folder in the library. The queue lasts for the current server session.
+On **PS5 Games**, select one or more local game folders, choose **exFAT**, **FFPKG** (UFS2), or **FFPFSC** (compressed exFAT), then click **Queue conversions**. The server checks that the selected builder is available and the output directories are writable before accepting the batch. It builds one image at a time and continues when you close the browser. Open **PS5 Queue** to see the current phase and elapsed time, check results, cancel a job, or retry it. Each completed image appears beside its source folder in the library.
+
+The server saves conversion jobs in `.ps3mgr-conversion-queue.json` at the root of the PS5 library. Waiting jobs carry over across server or container restarts, including queues paused by the user. An interrupted build can be retried from **PS5 Queue** once its builder exits. The server removes partial staging files after it obtains the conversion lock. If a conversion from an older version left a staging directory named `.ps5-<hash>-<format>`, remove that directory only after confirming its builder has exited.
 
 The CLI runs its own queue and waits for all selected folders to finish. Supply titles, title IDs, or the `library_id` values from `ps3mgr ps5 local-games --json`.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -21,7 +22,7 @@ type Downloader interface {
 	DownloadGame(ctx context.Context, ip string, game domain.Game, localRoot string, progress func(ps3ftp.Progress)) error
 }
 
-type ConvertFunc func(ctx context.Context, game domain.Game, format string) (filename string, err error)
+type ConvertFunc func(ctx context.Context, game domain.Game, format string, phase func(domain.ConversionPhase) error) (filename string, err error)
 
 type Publisher interface {
 	Publish(eventType string, payload any)
@@ -56,6 +57,7 @@ type Manager struct {
 	platform    domain.Platform
 	eventPrefix string
 	direction   domain.TransferDirection
+	journal     *conversionJournal
 }
 
 func New(uploader Uploader, publisher Publisher, remoteRoot string) *Manager {
@@ -113,6 +115,7 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 		}
 	}
 	m.stopOnError[queueID] = options.StopOnError
+	oldOrderLen, oldPendingLen := len(m.order), len(m.pending)
 	created := make([]domain.Transfer, 0, len(games))
 	for _, game := range games {
 		item := &domain.Transfer{
@@ -123,6 +126,15 @@ func (m *Manager) Enqueue(games []domain.Game, consoleIP string, options Options
 		m.order = append(m.order, item.ID)
 		m.pending = append(m.pending, item.ID)
 		created = append(created, *item)
+	}
+	if err := m.saveConversionQueueLocked(); err != nil {
+		for _, item := range created {
+			delete(m.items, item.ID)
+		}
+		delete(m.stopOnError, queueID)
+		m.order = m.order[:oldOrderLen]
+		m.pending = m.pending[:oldPendingLen]
+		return nil, err
 	}
 	m.cond.Broadcast()
 	m.publish("queue.created", map[string]any{"queue_id": queueID, "platform": m.platform, "items": created})
@@ -146,7 +158,7 @@ func (m *Manager) List() []domain.Transfer {
 	result := make([]domain.Transfer, 0, len(m.order))
 	for _, id := range m.order {
 		if item := m.items[id]; item != nil {
-			result = append(result, *item)
+			result = append(result, transferSnapshot(*item))
 		}
 	}
 	return result
@@ -159,21 +171,36 @@ func (m *Manager) Get(id string) (domain.Transfer, bool) {
 	if !ok {
 		return domain.Transfer{}, false
 	}
-	return *item, true
+	return transferSnapshot(*item), true
+}
+
+func transferSnapshot(item domain.Transfer) domain.Transfer {
+	if item.Direction == domain.TransferConversion && item.StartedAt != nil && item.FinishedAt == nil {
+		item.ElapsedSeconds = max(0, int64(time.Since(*item.StartedAt).Seconds()))
+	}
+	return item
 }
 
 func (m *Manager) Cancel(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return fmt.Errorf("transfer manager is shutting down")
+	}
 	item, ok := m.items[id]
 	if !ok {
 		return fmt.Errorf("transfer not found")
 	}
 	switch item.State {
 	case domain.QueueWaiting:
+		previous := *item
 		item.State = domain.QueueCancelled
 		now := time.Now()
 		item.FinishedAt = &now
+		if err := m.saveConversionQueueLocked(); err != nil {
+			*item = previous
+			return err
+		}
 		m.publish("queue.item_cancelled", *item)
 	case domain.QueueConverting, domain.QueueStarting, domain.QueueTransferring, domain.QueueVerifying:
 		if m.activeID == id && m.activeStop != nil {
@@ -188,6 +215,9 @@ func (m *Manager) Cancel(id string) error {
 func (m *Manager) Retry(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return fmt.Errorf("transfer manager is shutting down")
+	}
 	item, ok := m.items[id]
 	if !ok {
 		return fmt.Errorf("transfer not found")
@@ -198,50 +228,95 @@ func (m *Manager) Retry(id string) error {
 	if m.convert != nil && m.conversionPending(item.Game, item.OutputFormat) {
 		return fmt.Errorf("%s is already queued for %s conversion", item.Game.Title, item.OutputFormat)
 	}
-	// A cancelled waiting job may still have an earlier slot in the FIFO.
-	m.pending = slices.DeleteFunc(m.pending, func(pending string) bool { return pending == id })
+	previous := *item
 	item.State = domain.QueueWaiting
 	item.Error = ""
 	item.BytesTransferred = 0
 	item.Percentage = 0
+	if m.convert != nil {
+		item.StartedAt = nil
+		item.ConversionPhase = ""
+		item.ElapsedSeconds = 0
+	}
 	item.FinishedAt = nil
+	// Keep the retry at the tail, including when the old slot is still queued.
+	oldPending := m.pending
+	if m.journal != nil {
+		m.pending = slices.Clone(m.pending)
+	}
+	m.pending = slices.DeleteFunc(m.pending, func(pending string) bool { return pending == id })
 	m.pending = append(m.pending, id)
+	if err := m.saveConversionQueueLocked(); err != nil {
+		*item = previous
+		m.pending = oldPending
+		return err
+	}
 	m.cond.Broadcast()
 	m.publish("queue.item_retried", *item)
 	return nil
 }
 
-func (m *Manager) Pause() {
-	m.mu.Lock()
-	m.paused = true
-	m.mu.Unlock()
-	m.publish("queue.paused", nil)
+func (m *Manager) Pause() error {
+	return m.setPaused(true, "queue.paused")
 }
 
-func (m *Manager) Resume() {
+func (m *Manager) Resume() error {
+	return m.setPaused(false, "queue.resumed")
+}
+
+func (m *Manager) setPaused(paused bool, event string) error {
 	m.mu.Lock()
-	m.paused = false
+	defer m.mu.Unlock()
+	if m.closed {
+		return fmt.Errorf("transfer manager is shutting down")
+	}
+	previous := m.paused
+	m.paused = paused
+	if m.journal != nil && (len(m.items) != 0 || m.journal.lock != nil) {
+		if err := m.saveConversionQueueLocked(); err != nil {
+			m.paused = previous
+			return err
+		}
+	}
 	m.cond.Broadcast()
-	m.mu.Unlock()
-	m.publish("queue.resumed", nil)
+	m.publish(event, nil)
+	return nil
 }
 
 func (m *Manager) ClearCompleted() int {
+	removed, _ := m.ClearCompletedChecked()
+	return removed
+}
+
+func (m *Manager) ClearCompletedChecked() (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	kept := m.order[:0]
-	removed := 0
+	if m.closed {
+		return 0, fmt.Errorf("transfer manager is shutting down")
+	}
+	kept := make([]string, 0, len(m.order))
+	var removed []string
 	for _, id := range m.order {
 		item := m.items[id]
 		if item != nil && (item.State == domain.QueueCompleted || item.State == domain.QueueCancelled) {
-			delete(m.items, id)
-			removed++
+			removed = append(removed, id)
 			continue
 		}
 		kept = append(kept, id)
 	}
+	if len(removed) == 0 {
+		return 0, nil
+	}
+	previous := m.order
 	m.order = kept
-	return removed
+	if err := m.saveConversionQueueLocked(); err != nil {
+		m.order = previous
+		return 0, err
+	}
+	for _, id := range removed {
+		delete(m.items, id)
+	}
+	return len(removed), nil
 }
 
 func (m *Manager) Close(ctx context.Context) error {
@@ -264,7 +339,15 @@ func (m *Manager) Close(ctx context.Context) error {
 }
 
 func (m *Manager) run() {
-	defer close(m.done)
+	defer func() {
+		m.mu.Lock()
+		if m.journal != nil && m.journal.lock != nil {
+			m.journal.lock.Close()
+			m.journal.lock = nil
+		}
+		m.mu.Unlock()
+		close(m.done)
+	}()
 	for {
 		m.mu.Lock()
 		for !m.closed && (m.paused || len(m.pending) == 0) {
@@ -275,21 +358,32 @@ func (m *Manager) run() {
 			return
 		}
 		id := m.pending[0]
+		oldPending := m.pending
 		m.pending = m.pending[1:]
 		item := m.items[id]
 		if item == nil || item.State != domain.QueueWaiting {
 			m.mu.Unlock()
 			continue
 		}
-		ctx, cancel := context.WithCancel(m.rootCtx)
-		m.activeID, m.activeStop = id, cancel
+		previous := *item
 		item.State = domain.QueueStarting
 		if m.convert != nil {
 			item.State = domain.QueueConverting
+			item.ConversionPhase = domain.ConversionPreparing
 		}
 		item.Attempts++
 		now := time.Now()
 		item.StartedAt = &now
+		if err := m.saveConversionQueueLocked(); err != nil {
+			*item = previous
+			m.pending = oldPending
+			m.paused = true
+			m.mu.Unlock()
+			m.reportQueueSaveError(err)
+			continue
+		}
+		ctx, cancel := context.WithCancel(m.rootCtx)
+		m.activeID, m.activeStop = id, cancel
 		m.mu.Unlock()
 
 		m.publish("queue.started", map[string]any{"queue_id": item.QueueID, "platform": m.platform})
@@ -299,10 +393,6 @@ func (m *Manager) run() {
 
 		m.mu.Lock()
 		m.activeID, m.activeStop = "", nil
-		failedQueue := item.State == domain.QueueFailed && m.stopOnError[item.QueueID]
-		if failedQueue {
-			m.cancelWaitingQueueLocked(item.QueueID)
-		}
 		queueFinished := m.queueFinishedLocked(item.QueueID)
 		m.mu.Unlock()
 		if queueFinished {
@@ -315,41 +405,71 @@ func (m *Manager) process(ctx context.Context, item *domain.Transfer) {
 	var filename string
 	var err error
 	if m.convert != nil {
-		filename, err = m.convert(ctx, item.Game, item.OutputFormat)
+		filename, err = m.convert(ctx, item.Game, item.OutputFormat, func(phase domain.ConversionPhase) error {
+			return m.conversionPhase(item.ID, phase)
+		})
 	} else {
 		err = m.transfer(ctx, item)
 	}
-	if err != nil {
-		m.mu.Lock()
-		value := m.items[item.ID]
-		now := time.Now()
-		value.FinishedAt = &now
-		if errors.Is(err, context.Canceled) {
-			value.State = domain.QueueCancelled
-			value.Error = err.Error()
-			if m.convert == nil {
-				value.Error = "transfer cancelled"
-			}
-		} else {
-			value.State = domain.QueueFailed
-			value.Error = err.Error()
-		}
-		snapshot := *value
-		m.mu.Unlock()
-		if snapshot.State == domain.QueueCancelled {
-			m.publish("queue.item_cancelled", snapshot)
-		} else {
-			m.publish("queue.item_failed", snapshot)
-		}
-		return
-	}
 	m.mu.Lock()
 	now := time.Now()
-	item.State, item.FinishedAt = domain.QueueCompleted, &now
-	item.Filename, item.Percentage = filename, 100
-	snapshot := *item
+	if m.convert != nil {
+		item.ElapsedSeconds = max(0, int64(now.Sub(*item.StartedAt).Seconds()))
+	}
+	item.FinishedAt = &now
+	event := "queue.item_completed"
+	switch {
+	case err == nil:
+		item.State = domain.QueueCompleted
+		item.Filename, item.Percentage = filename, 100
+	case errors.Is(err, context.Canceled) && !(m.convert != nil && m.closed):
+		item.State = domain.QueueCancelled
+		item.Error = "transfer cancelled"
+		if m.convert != nil {
+			item.Error = "conversion cancelled"
+		}
+		event = "queue.item_cancelled"
+	default:
+		item.State = domain.QueueFailed
+		item.Error = err.Error()
+		if m.convert != nil && m.closed && errors.Is(err, context.Canceled) {
+			item.Error = "conversion interrupted by server shutdown; retry to rebuild the image"
+		}
+		if m.stopOnError[item.QueueID] {
+			m.cancelWaitingQueueLocked(item.QueueID)
+		}
+		event = "queue.item_failed"
+	}
+	saveErr := m.saveConversionQueueLocked()
+	snapshot := transferSnapshot(*item)
 	m.mu.Unlock()
-	m.publish("queue.item_completed", snapshot)
+	if saveErr != nil {
+		m.reportQueueSaveError(saveErr)
+	}
+	m.publish(event, snapshot)
+}
+
+func (m *Manager) conversionPhase(id string, phase domain.ConversionPhase) error {
+	m.mu.Lock()
+	item := m.items[id]
+	previous := item.ConversionPhase
+	item.ConversionPhase = phase
+	if phase == domain.ConversionFinalizing {
+		if err := m.saveConversionQueueLocked(); err != nil {
+			item.ConversionPhase = previous
+			m.mu.Unlock()
+			return err
+		}
+	}
+	snapshot := transferSnapshot(*item)
+	m.mu.Unlock()
+	m.publish("queue.progress", snapshot)
+	return nil
+}
+
+func (m *Manager) reportQueueSaveError(err error) {
+	slog.Error("PS5 conversion queue could not be saved", "error", err)
+	m.publish("queue.store_failed", map[string]string{"error": err.Error()})
 }
 
 func (m *Manager) transfer(ctx context.Context, item *domain.Transfer) error {
@@ -428,7 +548,7 @@ func (m *Manager) snapshot(id string) domain.Transfer {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if item := m.items[id]; item != nil {
-		return *item
+		return transferSnapshot(*item)
 	}
 	return domain.Transfer{}
 }

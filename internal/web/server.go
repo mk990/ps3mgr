@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +32,9 @@ func managerList(manager *transfers.Manager) []domain.Transfer {
 }
 
 func New(application *app.Service) *Server {
+	if err := application.PS5.RestoreConversions(); err != nil {
+		slog.Warn("PS5 conversion queue unavailable", "error", err)
+	}
 	s := &Server{app: application, mux: http.NewServeMux()}
 	s.routes()
 	return s

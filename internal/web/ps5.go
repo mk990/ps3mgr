@@ -194,7 +194,12 @@ func (s *Server) ps5Cancel(w http.ResponseWriter, r *http.Request) {
 	s.ps5QueueAction(w, r, (*transfers.Manager).Cancel)
 }
 func (s *Server) ps5Retry(w http.ResponseWriter, r *http.Request) {
-	s.ps5QueueAction(w, r, (*transfers.Manager).Retry)
+	s.ps5QueueAction(w, r, func(manager *transfers.Manager, id string) error {
+		if manager == s.app.PS5.Conversions {
+			return s.app.PS5.RetryConversion(r.Context(), id)
+		}
+		return manager.Retry(id)
+	})
 }
 
 func (s *Server) ps5Pull(w http.ResponseWriter, r *http.Request) {

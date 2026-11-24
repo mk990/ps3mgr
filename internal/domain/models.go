@@ -52,6 +52,13 @@ type Console struct {
 type QueueState string
 
 type TransferDirection string
+type ConversionPhase string
+
+const (
+	ConversionPreparing  ConversionPhase = "preparing"
+	ConversionBuilding   ConversionPhase = "building"
+	ConversionFinalizing ConversionPhase = "finalizing"
+)
 
 const (
 	TransferUpload     TransferDirection = "upload"
@@ -79,6 +86,7 @@ type Transfer struct {
 	Game             Game              `json:"game"`
 	State            QueueState        `json:"state"`
 	OutputFormat     string            `json:"output_format,omitempty"`
+	ConversionPhase  ConversionPhase   `json:"conversion_phase,omitempty"`
 	Filename         string            `json:"filename,omitempty"`
 	CurrentFile      string            `json:"current_file,omitempty"`
 	BytesTransferred int64             `json:"bytes_transferred"`
