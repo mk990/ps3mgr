@@ -23,7 +23,8 @@ func TestEmbeddedPackageAvatar(t *testing.T) {
 				base = 0x200
 			}
 			icon := []byte("\x89PNG\r\n\x1a\n")
-			data := make([]byte, base+0x200+len(icon))
+			param := []byte(`{"titleId":"PPSA12345","contentId":"EP9000-PPSA12345_00-ABCDEFGHIJKLMNOP","localizedParameters":{"en-US":{"titleName":"Package title"}},"contentVersion":"01.002.000"}`)
+			data := make([]byte, base+0x300+len(param))
 			copy(data, "\x7f"+wrapper)
 			switch wrapper {
 			case "FIH":
@@ -35,12 +36,16 @@ func TestEmbeddedPackageAvatar(t *testing.T) {
 			}
 			header := data[base:]
 			copy(header, "\x7fCNT")
-			binary.BigEndian.PutUint32(header[16:], 1)
+			binary.BigEndian.PutUint32(header[16:], 2)
 			binary.BigEndian.PutUint32(header[24:], 0x100)
 			binary.BigEndian.PutUint32(header[0x100:], 0x1200)
 			binary.BigEndian.PutUint32(header[0x110:], 0x200)
 			binary.BigEndian.PutUint32(header[0x114:], uint32(len(icon)))
 			copy(header[0x200:], icon)
+			binary.BigEndian.PutUint32(header[0x120:], 0x2000)
+			binary.BigEndian.PutUint32(header[0x130:], 0x300)
+			binary.BigEndian.PutUint32(header[0x134:], uint32(len(param)))
+			copy(header[0x300:], param)
 			path := filepath.Join(root, name)
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
@@ -51,10 +56,17 @@ func TestEmbeddedPackageAvatar(t *testing.T) {
 			if err != nil || len(items) != 1 || items[0].IconURL == "" {
 				t.Fatalf("games = %+v, %v", items, err)
 			}
+			game := items[0]
+			if game.Title != "Package title" || game.ID != "PPSA12345" || game.Region != "EP" || game.Version != "01.002.000" {
+				t.Fatalf("package metadata = %+v", game)
+			}
 			advertise := func() (string, error) { return "http://localhost", nil }
 			feed, err := service.FPKGiItems(ctx, advertise)
 			if err != nil || len(feed) != 1 || feed[0].CoverURL != "http://localhost"+items[0].IconURL {
 				t.Fatalf("feed = %+v, %v", feed, err)
+			}
+			if feed[0].TitleID != game.ID || feed[0].Name != game.Title || feed[0].Version != game.Version || feed[0].Region != game.Region {
+				t.Fatalf("feed metadata = %+v", feed[0])
 			}
 			handler := service.FPKGiHandler(advertise)
 			request := httptest.NewRequest(http.MethodGet, items[0].IconURL, nil)

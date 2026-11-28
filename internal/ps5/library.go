@@ -115,6 +115,19 @@ func (Library) Scan(ctx context.Context, root string) ([]domain.Game, error) {
 				game.IconURL = source.IconURL
 			}
 		}
+		if game.Format == "pkg" {
+			relative, err := filepath.Rel(root, game.LocalPath)
+			if err != nil {
+				return nil, err
+			}
+			meta := packageMetadata(ctx, root, relative, game.Size)
+			game.ID = fallbackString(meta.ID, game.ID)
+			game.Title = fallbackString(meta.Title, game.Title)
+			game.Version = meta.Version
+			if meta.ContentID != "" {
+				game.Region = strings.ToUpper(meta.ContentID[:2])
+			}
+		}
 	}
 	sort.SliceStable(result, func(i, j int) bool { return strings.ToLower(result[i].Title) < strings.ToLower(result[j].Title) })
 	return result, nil
@@ -149,8 +162,10 @@ func folderGame(ctx context.Context, directory, paramPath string) (domain.Game, 
 }
 
 type paramMetadata struct {
-	ID    string
-	Title string
+	ID        string
+	Title     string
+	ContentID string
+	Version   string
 }
 
 func readParam(path string) (paramMetadata, error) {
@@ -189,7 +204,7 @@ func parseParam(data []byte) (paramMetadata, error) {
 	if title == "" {
 		title = firstString(value, "titleName")
 	}
-	return paramMetadata{ID: normalizeTitleID(id), Title: title}, nil
+	return paramMetadata{ID: normalizeTitleID(id), Title: title, ContentID: firstString(value, "contentId"), Version: firstString(value, "contentVersion")}, nil
 }
 
 func firstString(value map[string]any, keys ...string) string {

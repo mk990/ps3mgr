@@ -62,3 +62,33 @@ func TestPS5FilePullKeepsFilenameAndAvatar(t *testing.T) {
 		}
 	}
 }
+
+func TestPS5ComparesPackagesWithInstalledTitles(t *testing.T) {
+	server := ftp.NewFileFTPServer(t, map[string][]byte{
+		"/games/Game PPSA12345.pkg": {},
+		"/games/Folder Game.exfat":  {},
+		"/user/app/PPSA00001":       {},
+	})
+	port, err := strconv.Atoi(server.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	for _, name := range []string{"Game PPSA12345.pkg", "Installed PPSA00001.PKG", "Folder Game.exfat"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	service := ps5.NewService(root, "/games", "anonymous", "", port, 1, time.Second, time.Second, nil)
+	defer service.Close(ctx)
+	games, err := service.Compare(ctx, "127.0.0.1")
+	if err != nil || len(games) != 3 {
+		t.Fatalf("compare = %+v, %v", games, err)
+	}
+	for _, game := range games {
+		if game.Installed != (game.ID == "PPSA00001" || game.Format == "exfat") {
+			t.Errorf("unexpected install status for %+v", game)
+		}
+	}
+}

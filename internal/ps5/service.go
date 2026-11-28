@@ -59,7 +59,7 @@ func NewService(gameDir, remoteDir, user, password string, port, workers int, sc
 	s := &Service{
 		GameDir: gameDir, RemoteDir: remoteDir, FTP: ftpService, events: events,
 		Scanner:   &scanner.Scanner{Detector: ftpService, Workers: workers, Timeout: scanTimeout, DetectionTimeout: ftpTimeout, Port: fmt.Sprint(port)},
-		Transfers: transfers.NewPlatform(ftpService, events, remoteDir, domain.PlatformPS5),
+		Transfers: transfers.NewPlatform(consoleUploader{ftp: ftpService, dpiPort: "12800"}, events, remoteDir, domain.PlatformPS5),
 		Pulls:     transfers.NewDownload(ftpService, events, gameDir, domain.PlatformPS5),
 		consoles:  make(map[string]domain.Console),
 	}
@@ -220,13 +220,17 @@ func (s *Service) RemoteGames(ctx context.Context, ip string) ([]domain.Game, er
 	if err != nil {
 		return nil, err
 	}
+	s.recordRemoteGames(ip, result)
+	return result, nil
+}
+
+func (s *Service) recordRemoteGames(ip string, result []domain.Game) {
 	s.mu.Lock()
 	console := s.consoles[ip]
 	console.FTPOnline, console.Detected, console.GameCount, console.LastSeen = true, true, len(result), time.Now()
 	s.consoles[ip] = console
 	s.mu.Unlock()
 	s.publish("ps5.games.loaded", map[string]any{"platform": domain.PlatformPS5, "source": "remote", "console_id": ip, "count": len(result)})
-	return result, nil
 }
 
 func (s *Service) Compare(ctx context.Context, ip string) ([]domain.Game, error) {
@@ -238,11 +242,63 @@ func (s *Service) Compare(ctx context.Context, ip string) ([]domain.Game, error)
 			return nil, err
 		}
 	}
-	remote, err := s.RemoteGames(ctx, ip)
+	console, err := s.EnsureConsole(ip)
 	if err != nil {
 		return nil, err
 	}
-	return games.Compare(local, remote), nil
+	client, err := s.FTP.connect(ctx, console.IP)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	remote, mountErr := s.FTP.remoteGames(ctx, client)
+	hasPackages := false
+	for _, game := range local {
+		if game.Format == "pkg" {
+			hasPackages = true
+			break
+		}
+	}
+	if mountErr != nil && !hasPackages {
+		return nil, mountErr
+	}
+	if mountErr == nil {
+		s.recordRemoteGames(console.IP, remote)
+	}
+	result := games.Compare(local, remote)
+	if !hasPackages {
+		return result, nil
+	}
+
+	// Native package installs register a title in /user/app. A .pkg left
+	// in the mount directory is only a file, not evidence of installation.
+	names, err := client.Names(ctx, "/user/app")
+	if err != nil && mountErr != nil {
+		return nil, fmt.Errorf("list installed PS5 titles: %w", err)
+	}
+	installed := make(map[string]bool, len(names))
+	for _, name := range names {
+		installed[strings.ToUpper(name)] = true
+	}
+	for i := range result {
+		game := &result[i]
+		if game.Format != "pkg" {
+			if mountErr != nil {
+				game.State = domain.StateUnknown
+			}
+			continue
+		}
+		game.Installed = installed[strings.ToUpper(game.ID)]
+		switch {
+		case err != nil || game.ID == "":
+			game.State = domain.StateUnknown
+		case game.Installed:
+			game.State = domain.StateInstalled
+		default:
+			game.State = domain.StateNotInstalled
+		}
+	}
+	return result, ctx.Err()
 }
 
 func (s *Service) Enqueue(consoleIP string, gameIDs []string, stopOnError bool) ([]domain.Transfer, error) {

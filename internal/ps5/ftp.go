@@ -77,6 +77,10 @@ func (f *FTP) RemoteGames(ctx context.Context, ip string) ([]domain.Game, error)
 		return nil, err
 	}
 	defer client.Close()
+	return f.remoteGames(ctx, client)
+}
+
+func (f *FTP) remoteGames(ctx context.Context, client *psftp.Client) ([]domain.Game, error) {
 	names, err := client.Names(ctx, f.RemoteRoot)
 	if err != nil {
 		return nil, fmt.Errorf("list ShadowMountPlus games: %w", err)

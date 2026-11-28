@@ -3,7 +3,6 @@ package ps5
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -93,28 +92,49 @@ func (s *Service) FPKGiItems(ctx context.Context, advertise Advertiser) ([]fpkgi
 }
 
 func pkgItem(ctx context.Context, base, root, relative string, size int64) fpkgi.Item {
+	meta := packageMetadata(ctx, root, relative, size)
 	filename := filepath.Base(relative)
-	contentID := contentIDPattern.FindString(filename)
-	if contentID == "" {
-		contentID = headerContentID(filepath.Join(root, relative))
+	meta.ID = fallbackString(meta.ID, titleID(filename))
+	if meta.Title == "" {
+		name := contentIDPattern.ReplaceAllString(filename, "")
+		meta.Title = titleFromFilename(strings.ReplaceAll(name, "_", " "), meta.ID)
 	}
-	id := titleID(contentID)
-	if id == "" {
-		id = titleID(filename)
-	}
-	name := contentIDPattern.ReplaceAllString(filename, "")
-	name = titleFromFilename(strings.ReplaceAll(name, "_", " "), id)
-	item := fpkgi.Item{URL: base + fpkgiURL("pkg", relative), TitleID: fallbackString(id, "UNKNOWN"), Name: name, Size: size}
-	if contentID != "" {
-		item.Region = strings.ToUpper(contentID[:2])
-	}
-	if match := pkgVersionRegexp.FindStringSubmatch(filename); len(match) == 3 {
-		item.Version = fmt.Sprintf("%02s.%s", match[1], match[2])
+	item := fpkgi.Item{URL: base + fpkgiURL("pkg", relative), TitleID: fallbackString(meta.ID, "UNKNOWN"), Name: meta.Title, Version: meta.Version, Size: size}
+	if meta.ContentID != "" {
+		item.Region = strings.ToUpper(meta.ContentID[:2])
 	}
 	if avatar := imageAvatarURL(ctx, root, relative); avatar != "" {
 		item.CoverURL = base + avatar
 	}
 	return item
+}
+
+func packageMetadata(ctx context.Context, root, relative string, size int64) paramMetadata {
+	filename := filepath.Base(relative)
+	meta := paramMetadata{}
+	contentID := contentIDPattern.FindString(filename)
+	path, err := resolveLibraryFile(root, relative, []string{".pkg"})
+	if err == nil {
+		if file, err := os.Open(path); err == nil {
+			defer file.Close()
+			if data, err := pkgicon.PS5Param(ctx, file, size); err == nil {
+				meta, _ = parseParam(data)
+			}
+			if contentID == "" && !contentIDPattern.MatchString(meta.ContentID) {
+				header := make([]byte, 0x1000)
+				n, _ := file.ReadAt(header, 0)
+				contentID = string(contentIDPattern.Find(header[:n]))
+			}
+		}
+	}
+	meta.ContentID = fallbackString(contentIDPattern.FindString(meta.ContentID), contentID)
+	meta.ID = fallbackString(meta.ID, titleID(meta.ContentID))
+	if meta.Version == "" {
+		if match := pkgVersionRegexp.FindStringSubmatch(filename); len(match) == 3 {
+			meta.Version = fmt.Sprintf("%02s.%s", match[1], match[2])
+		}
+	}
+	return meta
 }
 
 func imageAvatarURL(ctx context.Context, root, relative string) string {
@@ -155,19 +175,6 @@ func imageAvatarURL(ctx context.Context, root, relative string) string {
 		return ""
 	}
 	return fpkgiURL("icons", relative)
-}
-
-// headerContentID reads the content ID from the start of a package. Both PS4
-// and PS5 fake packages store it within the first few hundred bytes.
-func headerContentID(path string) string {
-	file, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	header := make([]byte, 0x1000)
-	n, _ := io.ReadFull(file, header)
-	return string(contentIDPattern.Find(header[:n]))
 }
 
 func fpkgiURL(kind, relative string) string {

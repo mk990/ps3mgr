@@ -29,8 +29,8 @@ Usage:
   ps3mgr ps5 pull    --ip IP GAME...
   ps3mgr ps5 queue [--json]
 
-The FTP destination is /data/etaHEN/games by default. The API never accepts
-an arbitrary remote destination path.
+Install sends .pkg files (including A53 FPKGs) to etaHEN Direct Package Installer v2
+on port 12800. Folders and mountable images use FTP (/data/etaHEN/games by default).
 `)
 		return nil
 	}
@@ -240,7 +240,9 @@ func (r Runner) ps5Compare(ctx context.Context, application *app.Service, args [
 	}
 	for _, game := range items {
 		status := "MISSING"
-		if game.Installed {
+		if game.State == domain.StateUnknown {
+			status = "UNKNOWN"
+		} else if game.Installed {
 			status = "INSTALLED"
 		}
 		fmt.Fprintf(r.Out, "%-10s %-12s %-8s %s\n", status, fallback(game.ID, "UNKNOWN"), game.Format, game.Title)
@@ -298,7 +300,7 @@ func (r Runner) ps5Install(ctx context.Context, application *app.Service, args [
 			return err
 		}
 	} else {
-		fmt.Fprintf(r.Out, "Queued %d PS5 game(s) for %s:%d -> %s.\n", len(created), *ip, application.PS5.FTP.Port, application.PS5.RemoteDir)
+		fmt.Fprintf(r.Out, "Queued %d PS5 game(s) for %s.\n", len(created), *ip)
 	}
 	wanted := make(map[string]bool)
 	for _, item := range created {
@@ -320,7 +322,7 @@ func (r Runner) ps5Install(ctx context.Context, application *app.Service, args [
 			}
 			for _, item := range items {
 				if wanted[item.ID] && item.State == domain.QueueFailed {
-					return fmt.Errorf("one or more PS5 transfers failed")
+					return fmt.Errorf("%s: %s", item.Game.Title, item.Error)
 				}
 			}
 			if !*asJSON {
@@ -342,7 +344,7 @@ func (r Runner) ps5Queue(application *app.Service, args []string) error {
 		return r.printValue(items, true)
 	}
 	for _, item := range items {
-		fmt.Fprintf(r.Out, "%-14s %-12s %6.2f%% %s -> %s:%d\n", item.State, fallback(item.Game.ID, "UNKNOWN"), item.Percentage, item.Game.Title, item.ConsoleIP, application.PS5.FTP.Port)
+		fmt.Fprintf(r.Out, "%-14s %-12s %6.2f%% %s -> %s\n", item.State, fallback(item.Game.ID, "UNKNOWN"), item.Percentage, item.Game.Title, item.ConsoleIP)
 	}
 	if len(items) == 0 {
 		fmt.Fprintln(r.Out, "PS5 queue is empty.")

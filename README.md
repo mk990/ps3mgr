@@ -1,6 +1,6 @@
 # PlayStation Manager
 
-PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage or PS4 fake-PKG conversion, PS3 games through FTP, PS4 packages through flatZ Remote Package Installer, and PS5 games through etaHEN/ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
+PlayStation Manager (`ps3mgr`) manages PS2 games through Open PS2 Loader USB storage or PS4 fake-PKG conversion, PS3 games through FTP, PS4 packages through flatZ Remote Package Installer, and PS5 games through etaHEN Direct Package Installer v2 or ShadowMountPlus FTP. Every platform has isolated library, device, event, and queue state, so work on one platform never blocks another platform.
 
 It replaces the external `bash`, `nmap`, `timeout`, and `lftp` dependencies used by `ps3-games.sh`. The executable contains its FTP client, network scanner, HTTP API, SSE event stream, and web interface.
 
@@ -222,7 +222,7 @@ Game arguments accepted by `install` can be an exact title, title ID, or the sta
 | `PS3MGR_PS4_PKG_LISTEN` | `0.0.0.0:8081` | Local HTTP listener used to stream PKGs to the PS4 |
 | `PS3MGR_PS4_ADVERTISE_URL` | empty | Required for installs; HTTP URL with the manager host's LAN IP and package port |
 | `PS3MGR_PS4_RPI_TIMEOUT` | `15s` | Timeout for Remote Package Installer API calls |
-| `PS3MGR_PS5_GAME_DIR` | `./ps5-games` | Recursive local PS5 ShadowMountPlus library |
+| `PS3MGR_PS5_GAME_DIR` | `./ps5-games` | Local PS5 package, folder and image library |
 | `PS3MGR_PS5_REMOTE_GAME_DIR` | `/data/etaHEN/games` | PS5 FTP installation/library directory |
 | `PS3MGR_PS5_FTP_PORT` | `2121` | etaHEN FTP port used for PS5 scan and transfers |
 | `PS3MGR_PS5_FTP_USER` | `anonymous` | PS5 FTP username |
@@ -327,9 +327,11 @@ For FAT32-compatible images, the installer writes OPL's `DVD/<SERIAL>.<title>.is
 
 The configured PS2 system directory must exist and contain files before installation. The installer prepares standard OPL directories (`DVD`, `CD`, `ART`, `CFG`, `VMC`, `THM`, and `APPS`) and copies the configured system tree into the USB target's `system` directory without invoking Bash, `cp`, `df`, `iso2opl`, or another shell utility.
 
-## PS5 / ShadowMountPlus behavior
+## PS5 packages and ShadowMountPlus games
 
 The PS5 module follows the [ShadowMountPlus layout](https://github.com/drakmor/ShadowMountPlus): games are discovered below a dedicated local root and uploaded to `/data/etaHEN/games` by default. It recognizes direct game folders containing `sce_sys/param.json` and every documented image source: `.ffpkg`, `.exfat`, `.ffpfs`, and `.ffpfsc`. Folder metadata supplies the title ID, localized title, and local icon where available; PPSA and CUSA IDs are also detected in filenames. Normal game discovery skips `backports/`.
+
+**Install a PS5 A53 FPKG.** Place the existing `.pkg` file under `PS3MGR_PS5_GAME_DIR`. On a PS5 with compatible package support, enable **Direct Package Installer v2** in etaHEN Toolbox. Select the package on **PS5 Games** and click **Install selected**, or run `ps3mgr ps5 install --ip 192.168.1.155 "Game.pkg"`. The PS5 queue streams the package to port 12800 and completes when etaHEN accepts the installation task. The console tracks the remaining installation. The library and FPKGi feed use the title ID, localized name and version from the embedded `param.json` when available. [etaHEN installer](https://github.com/etaHEN/etaHEN/blob/main/Source%20Code/util/source/DirectPKGInstaller.cpp)
 
 PS5 pulls keep the original filename and extension for packages and ShadowMountPlus images. The library shows a matching PNG or JPEG beside the file, or the embedded icon in a native `.pkg`. When available, a pull also saves artwork from the console beside the downloaded game. For `.ffpfsc` containers, it can read the avatar from the nested image mounted by ShadowMountPlus. The container can still be copied while unmounted.
 
@@ -380,7 +382,7 @@ For example, in `/user/data/FPKGi/config.json`:
 The package server's index page (`http://HOST_LAN_IP:8081/`) links to these lists, and it also accepts `/ps4/fpkgi/games.json`, `/ps5/fpkgi` and the panel's paths (`/api/ps4/fpkgi/games.json`, `/api/ps5/fpkgi`) as aliases. Any other unknown path returns a 404 listing the correct URLs. The same files can be downloaded from the panel (the **Export FPKGi content JSON** panel on the dashboard, which also shows the live URLs and copies a ready-made `CONTENT_URLS` block, links on the PS4 Packages and PS5 Games pages, or `GET /api/ps4/fpkgi/{category}` and `GET /api/ps5/fpkgi`) and copied to `/user/data/FPKGi/ContentJSONs/`; their URLs still point at the package server.
 
 - **PS4:** packages are grouped as games, updates, or DLC using the same rules as the PS4 Packages page. License-only packages are omitted, and so are split packages (`_0.pkg`, `_1.pkg`, …) because FPKGi downloads a single file per entry. Region, version, and the cached `icon0` cover are included when known.
-- **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. The title ID and region come from the content ID in the file name or package header, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) takes priority over the embedded package icon. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.
+- **PS5:** FPKGi installs `.pkg` files only, so the PS5 list contains the `.pkg` files found below `PS3MGR_PS5_GAME_DIR`; ShadowMountPlus folders and images are not listed. Package metadata falls back to the file name and header when needed, and an image beside the package with the same base name (`Game.png`, `.jpg`, `.jpeg`) takes priority over the embedded package icon. Only `.pkg` and those image files inside the PS5 library are reachable under `/fpkgi/ps5/`.
 
 ## PS3 and network requirements
 
